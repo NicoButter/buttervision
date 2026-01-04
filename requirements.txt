@@ -1,0 +1,45 @@
+# ButterVision - Stable Diffusion WebUI
+# Requisitos mínimos para Python 3.10+
+
+# PyTorch con soporte CUDA (adaptar según tu versión de CUDA)
+# Para CUDA 11.8:
+torch>=2.1.0
+torchvision>=0.16.0
+# Para CUDA 12.1, usar: torch>=2.1.0+cu121
+
+# Diffusers y transformers
+diffusers>=0.25.0
+transformers>=4.36.0
+accelerate>=0.25.0
+
+# Optimizaciones de memoria
+xformers>=0.0.23; platform_system != "Darwin"
+safetensors>=0.4.1
+
+# Interfaz y API
+gradio>=4.12.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.26.0
+
+# Utilidades de imagen
+Pillow>=10.1.0
+opencv-python>=4.9.0.80
+numpy>=1.24.0
+
+# LoRA y fine-tuning
+peft>=0.7.0
+
+# Utilidades generales
+omegaconf>=2.3.0
+tqdm>=4.66.0
+scipy>=1.11.0
+
+# Monitorización y logging
+psutil>=5.9.0
+rich>=13.7.0
+
+# ControlNet (opcional, descomentar si lo necesitas)
+# controlnet-aux>=0.0.7
+
+# Opcional: para convertir modelos de Checkpoint
+# omegaconf>=2.3.0

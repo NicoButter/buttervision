@@ -1,0 +1,47 @@
+# ButterVision outputs - imágenes generadas
+*.png
+*.jpg
+*.jpeg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Models cache (HuggingFace)
+cache/
+models/Stable-diffusion/
+models/VAE/
+
+# LoRAs y modelos (mantener estructura pero ignorar archivos grandes)
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# Logs y temporal
+*.log
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Distribution
+dist/
+build/
+*.egg-info/
