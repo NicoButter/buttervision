@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from PIL import Image
 import config
-from core import StableDiffusionManager, lora_manager
+from core import StableDiffusionManager, lora_manager, ModelManager
 
 
 class ButterVisionUI:
@@ -17,22 +17,26 @@ class ButterVisionUI:
     def __init__(self):
         self.sd_manager = StableDiffusionManager()
         self.lora_manager = lora_manager
+        self.model_manager = ModelManager()
         self.available_models = self._scan_models()
+    
+    def update_detail_enhancer(self, enabled, weight):
+        """Actualiza la configuración del LoRA de mejora de detalles"""
+        try:
+            self.sd_manager.set_detail_enhancer(enabled, weight)
+            status = f"✅ LoRA de detalles {'activado' if enabled else 'desactivado'} (peso: {weight})"
+            return status
+        except Exception as e:
+            return f"❌ Error al actualizar LoRA: {str(e)}"
 
     def _scan_models(self):
-        """Escanea la carpeta models/ para encontrar checkpoints"""
-        models_dir = Path("models") / "Stable-diffusion"
-        if not models_dir.exists():
-            return ["runwayml/stable-diffusion-v1-5"]  # Default
-
-        models = []
-        for ext in ["*.ckpt", "*.safetensors"]:
-            models.extend([f.stem for f in models_dir.glob(ext)])
-
-        if not models:
-            models = ["runwayml/stable-diffusion-v1-5"]
-
-        return models
+        """Escanea modelos locales disponibles"""
+        local_models = self.model_manager.list_local_models()
+        # Agregar el modelo por defecto si no está en locales
+        default_model = config.model_config.model_id
+        if default_model not in local_models:
+            local_models.insert(0, default_model)
+        return local_models
 
     def _save_images(self, images, mode, prompt, seed):
         """Guarda las imágenes generadas"""
@@ -149,13 +153,55 @@ class ButterVisionUI:
         self.available_models = self._scan_models()
         return gr.update(choices=self.available_models)
 
-    def download_model(self, url):
-        """Descarga modelo desde URL (placeholder)"""
-        # Implementar descarga desde CivitAI/HuggingFace
-        return f"Descarga desde {url} - No implementado aún"
+    def download_model(self, url_or_id, model_name=""):
+        """Descarga modelo desde URL o ID"""
+        try:
+            if not url_or_id.strip():
+                return "❌ Ingresa una URL o ID de modelo"
+
+            # Determinar tipo de descarga
+            if url_or_id.startswith("https://huggingface.co/"):
+                # Modelo de Hugging Face
+                model_id = url_or_id.replace("https://huggingface.co/", "").split("/")[0:2]
+                model_id = "/".join(model_id)
+                if not model_name:
+                    model_name = model_id.replace("/", "_")
+                path = self.model_manager.download_hf_model(model_id, model_name)
+                status = f"✅ Modelo HF descargado: {path}"
+            
+            elif url_or_id.startswith("https://civitai.com/") or url_or_id.isdigit():
+                # Modelo de CivitAI
+                if url_or_id.isdigit():
+                    model_id = url_or_id
+                else:
+                    # Extraer ID de la URL
+                    model_id = url_or_id.split("/")[-1]
+                
+                if not model_name:
+                    model_name = f"civitai_{model_id}"
+                
+                path = self.model_manager.download_civitai_model(model_id, model_name)
+                status = f"✅ Modelo CivitAI descargado: {path}"
+            
+            else:
+                # Asumir ID de HF
+                if not model_name:
+                    model_name = url_or_id.replace("/", "_")
+                path = self.model_manager.download_hf_model(url_or_id, model_name)
+                status = f"✅ Modelo HF descargado: {path}"
+
+            # Refrescar lista de modelos
+            self.available_models = self._scan_models()
+            return status
+
+        except Exception as e:
+            return f"❌ Error descargando modelo: {str(e)}"
 
     def create_interface(self):
         """Crea la interfaz minimalista con 4 pestañas"""
+
+        # Estado para modelos disponibles
+        models_state = gr.State(self.available_models)
 
         with gr.Blocks(title="ButterVision - Minimal SD WebUI", theme=gr.themes.Soft()) as interface:
 
@@ -186,11 +232,13 @@ class ButterVisionUI:
                             steps = gr.Slider(20, 100, value=20, step=1, label="Steps")
                             cfg_scale = gr.Slider(1, 20, value=7.5, step=0.5, label="CFG Scale")
                             seed = gr.Number(value=-1, label="Seed (-1 = random)")
-                            model = gr.Dropdown(
-                                choices=self.available_models,
-                                value=self.available_models[0],
-                                label="Model"
-                            )
+                            with gr.Row():
+                                txt2img_model = gr.Dropdown(
+                                    choices=self.available_models,
+                                    value=self.available_models[0],
+                                    label="Model"
+                                )
+                                refresh_model_btn = gr.Button("🔄", size="sm")
 
                     generate_btn = gr.Button("🚀 Generate", variant="primary", size="lg")
 
@@ -200,8 +248,14 @@ class ButterVisionUI:
 
                     generate_btn.click(
                         fn=self.txt2img_generate,
-                        inputs=[prompt, negative_prompt, steps, cfg_scale, seed, model],
+                        inputs=[prompt, negative_prompt, steps, cfg_scale, seed, txt2img_model],
                         outputs=[gallery, info_text]
+                    )
+
+                    refresh_model_btn.click(
+                        fn=self.refresh_models,
+                        inputs=[],
+                        outputs=[txt2img_model]
                     )
 
                 # ========================================
@@ -228,11 +282,13 @@ class ButterVisionUI:
                             cfg_scale = gr.Slider(1, 20, value=7.5, step=0.5, label="CFG Scale")
                             denoising_strength = gr.Slider(0, 1, value=0.75, step=0.05, label="Denoising Strength")
                             seed = gr.Number(value=-1, label="Seed (-1 = random)")
-                            model = gr.Dropdown(
-                                choices=self.available_models,
-                                value=self.available_models[0],
-                                label="Model"
-                            )
+                            with gr.Row():
+                                img2img_model = gr.Dropdown(
+                                    choices=self.available_models,
+                                    value=self.available_models[0],
+                                    label="Model"
+                                )
+                                refresh_model_btn = gr.Button("🔄", size="sm")
 
                     generate_btn = gr.Button("🚀 Generate", variant="primary", size="lg")
 
@@ -242,8 +298,14 @@ class ButterVisionUI:
 
                     generate_btn.click(
                         fn=self.img2img_generate,
-                        inputs=[init_image, prompt, negative_prompt, steps, cfg_scale, denoising_strength, seed, model],
+                        inputs=[init_image, prompt, negative_prompt, steps, cfg_scale, denoising_strength, seed, img2img_model],
                         outputs=[gallery, info_text]
+                    )
+
+                    refresh_model_btn.click(
+                        fn=self.refresh_models,
+                        inputs=[],
+                        outputs=[img2img_model]
                     )
 
                 # ========================================
@@ -277,12 +339,14 @@ class ButterVisionUI:
 
                         with gr.Column():
                             gr.Markdown("### 🤖 Modelo Base")
-                            base_model = gr.Dropdown(
-                                choices=self.available_models,
-                                value=self.available_models[0],
-                                label="Modelo base para el entrenamiento",
-                                info="El modelo SD que se usará como base. Tu GTX 1650 puede usar cualquier modelo de 1.5GB o menos"
-                            )
+                            with gr.Row():
+                                train_base_model = gr.Dropdown(
+                                    choices=self.available_models,
+                                    value=self.available_models[0],
+                                    label="Modelo base para el entrenamiento",
+                                    info="El modelo SD que se usará como base. Tu GTX 1650 puede usar cualquier modelo de 1.5GB o menos"
+                                )
+                                refresh_model_btn = gr.Button("🔄", size="sm")
                             gr.Markdown("*Para GTX 1650: usa modelos ligeros como SD 1.5. Evita SDXL por ahora.*")
 
                             gr.Markdown("### ⚙️ Parámetros de Entrenamiento")
@@ -312,8 +376,14 @@ class ButterVisionUI:
 
                     train_btn.click(
                         fn=self.train_lora,
-                        inputs=[training_images, trigger_word, base_model, epochs, learning_rate, network_rank],
+                        inputs=[training_images, trigger_word, train_base_model, epochs, learning_rate, network_rank],
                         outputs=[progress_output]
+                    )
+
+                    refresh_model_btn.click(
+                        fn=self.refresh_models,
+                        inputs=[],
+                        outputs=[train_base_model]
                     )
 
                 # ========================================
@@ -325,7 +395,7 @@ class ButterVisionUI:
 
                     with gr.Row():
                         refresh_btn = gr.Button("🔄 Refresh Models")
-                        models_list = gr.Dropdown(
+                        settings_models_list = gr.Dropdown(
                             choices=self.available_models,
                             label="Available Models",
                             interactive=False
@@ -334,23 +404,60 @@ class ButterVisionUI:
                     refresh_btn.click(
                         fn=self.refresh_models,
                         inputs=[],
-                        outputs=[models_list]
+                        outputs=[settings_models_list]
                     )
 
-                    gr.Markdown("## Download Model")
+                    gr.Markdown("## 🎨 Detail Enhancer LoRA")
+                    gr.Markdown("*Mejora automáticamente la calidad y detalles de todas las imágenes generadas*")
+
+                    with gr.Row():
+                        detail_enhancer_enabled = gr.Checkbox(
+                            label="Enable Detail Enhancer",
+                            value=True,
+                            info="Activa el LoRA que mejora detalles, caras y texturas"
+                        )
+                        detail_enhancer_weight = gr.Slider(
+                            label="Detail Enhancer Strength",
+                            minimum=0.0,
+                            maximum=1.0,
+                            value=0.6,
+                            step=0.1,
+                            info="Fuerza del efecto de mejora de detalles (0.6 recomendado)"
+                        )
+
+                    update_detail_btn = gr.Button("🔄 Update Detail Enhancer", variant="secondary")
+
+                    detail_status = gr.Textbox(
+                        label="Detail Enhancer Status",
+                        value="✅ LoRA de detalles activado (peso: 0.6)",
+                        interactive=False
+                    )
+
+                    update_detail_btn.click(
+                        fn=self.update_detail_enhancer,
+                        inputs=[detail_enhancer_enabled, detail_enhancer_weight],
+                        outputs=[detail_status]
+                    )
+
+                    gr.Markdown("## 📥 Download Model")
 
                     with gr.Row():
                         model_url = gr.Textbox(
-                            label="Model URL",
-                            placeholder="URL de CivitAI o HuggingFace"
+                            label="Model URL/ID",
+                            placeholder="https://huggingface.co/... o https://civitai.com/... o ID de CivitAI"
                         )
-                        download_btn = gr.Button("📥 Download")
+                        model_name = gr.Textbox(
+                            label="Local Name (optional)",
+                            placeholder="Nombre para guardar localmente"
+                        )
+
+                    download_btn = gr.Button("📥 Download Model", variant="secondary")
 
                     download_output = gr.Textbox(label="Download Status", interactive=False)
 
                     download_btn.click(
                         fn=self.download_model,
-                        inputs=[model_url],
+                        inputs=[model_url, model_name],
                         outputs=[download_output]
                     )
 

@@ -9,6 +9,7 @@ from typing import Optional
 # Rutas base del proyecto
 PROJECT_ROOT = Path(__file__).parent.absolute()
 MODELS_DIR = PROJECT_ROOT / "models"
+SD_MODELS_DIR = MODELS_DIR / "stable-diffusion"
 LORA_DIR = MODELS_DIR / "lora"
 CONTROLNET_DIR = MODELS_DIR / "controlnet"
 EMBEDDINGS_DIR = MODELS_DIR / "embeddings"
@@ -17,7 +18,7 @@ CACHE_DIR = PROJECT_ROOT / "cache"
 EXTENSIONS_DIR = PROJECT_ROOT / "extensions"
 
 # Crear directorios si no existen
-for directory in [MODELS_DIR, LORA_DIR, CONTROLNET_DIR, EMBEDDINGS_DIR, 
+for directory in [MODELS_DIR, SD_MODELS_DIR, LORA_DIR, CONTROLNET_DIR, EMBEDDINGS_DIR, 
                   OUTPUTS_DIR, CACHE_DIR, EXTENSIONS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -56,8 +57,8 @@ class ModelConfig:
 class ServerConfig:
     """Configuración del servidor web"""
     host: str = "0.0.0.0"
-    port: int = 7860
-    share: bool = False  # Gradio share link
+    port: int = 7861
+    share: bool = True  # Gradio share link
     auth: Optional[tuple] = None  # ("usuario", "contraseña") para autenticación
     queue_concurrency: int = 1  # Número de generaciones simultáneas
 

@@ -4,6 +4,7 @@ Permite cargar, descargar y aplicar LoRAs a los pipelines
 """
 import os
 import torch
+import requests
 from pathlib import Path
 from typing import Dict, List, Optional
 from safetensors.torch import load_file
@@ -24,11 +25,56 @@ class LoRAManager:
             lora_dir: Directorio donde están los archivos .safetensors de LoRAs
         """
         self.lora_dir = lora_dir or config.LORA_DIR
+        self.defaults_dir = self.lora_dir / "defaults"
         self.loaded_loras: Dict[str, float] = {}  # {nombre: peso}
         self.lora_paths: Dict[str, Path] = {}  # {nombre: ruta_completa}
         
+        # Crear directorio de defaults si no existe
+        self.defaults_dir.mkdir(parents=True, exist_ok=True)
+        
+        # NO descargar automáticamente durante init - hacerlo bajo demanda
+        # self._ensure_detail_enhancer_lora()
+        
         # Escanear directorio de LoRAs
         self.scan_lora_directory()
+    
+    def _ensure_detail_enhancer_lora(self):
+        """
+        Asegura que el LoRA de mejora de detalles esté disponible
+        Lo descarga automáticamente si no existe
+        """
+        detail_lora_path = self.defaults_dir / "add_detail_lora.safetensors"
+        detail_lora_url = "https://civitai.com/api/download/models/82098?type=Model&format=SafeTensor"
+        
+        if detail_lora_path.exists():
+            print("✅ LoRA de mejora de detalles ya está disponible")
+            return
+        
+        print("📥 Descargando LoRA de mejora de detalles por primera vez...")
+        print("   Esto mejorará automáticamente la calidad de todas tus imágenes")
+        
+        try:
+            # Descargar el archivo
+            response = requests.get(detail_lora_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            # Guardar el archivo
+            with open(detail_lora_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            print(f"✅ LoRA descargado exitosamente: {detail_lora_path}")
+            
+        except Exception as e:
+            print(f"⚠️  Error al descargar LoRA de detalles: {e}")
+            print("   Continuando sin LoRA de mejora de detalles...")
+            return
+        
+        # Verificar que el archivo se descargó correctamente
+        if detail_lora_path.exists() and detail_lora_path.stat().st_size > 0:
+            print("✅ LoRA de mejora de detalles listo para usar")
+        else:
+            print("⚠️  El archivo descargado parece estar corrupto")
     
     def scan_lora_directory(self) -> List[str]:
         """
@@ -47,6 +93,11 @@ class LoRAManager:
         for extension in ["*.safetensors", "*.pt", "*.bin"]:
             for lora_file in self.lora_dir.glob(extension):
                 lora_name = lora_file.stem  # Nombre sin extensión
+                self.lora_paths[lora_name] = lora_file
+            
+            # También buscar en defaults/
+            for lora_file in self.defaults_dir.glob(extension):
+                lora_name = f"defaults/{lora_file.stem}"  # Prefijo para identificar
                 self.lora_paths[lora_name] = lora_file
         
         if self.lora_paths:

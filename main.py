@@ -213,7 +213,7 @@ def main():
         "server_name": config.server_config.host,
         "server_port": config.server_config.port,
         "share": config.server_config.share,
-        "inbrowser": True,  # Abrir navegador automáticamente
+        "inbrowser": False,  # No abrir navegador automáticamente
         "show_error": config.ui_config.show_error,
     }
     

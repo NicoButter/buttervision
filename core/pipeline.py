@@ -60,6 +60,8 @@ class StableDiffusionManager:
         # Estado
         self.current_scheduler = config.model_config.default_scheduler
         self.loaded_loras = {}  # {nombre: peso}
+        self.detail_enhancer_enabled = True  # LoRA de detalles activado por defecto
+        self.detail_enhancer_weight = 0.6   # Peso por defecto
         
         print(f"🎨 ButterVision iniciando...")
         print(f"📦 Modelo: {self.model_id}")
@@ -125,7 +127,117 @@ class StableDiffusionManager:
         
         self.txt2img_pipe = pipe
         print("✅ Pipeline txt2img listo")
+        
+        # Aplicar LoRA de mejora de detalles si está habilitado
+        if self.detail_enhancer_enabled:
+            self._apply_detail_enhancer_lora(pipe)
+        
         return pipe
+    
+    def _apply_detail_enhancer_lora(self, pipe):
+        """
+        Aplica el LoRA de mejora de detalles al pipeline
+        
+        Args:
+            pipe: Pipeline de Stable Diffusion
+        """
+        try:
+            detail_lora_path = config.LORA_DIR / "defaults" / "add_detail_lora.safetensors"
+            
+            # Si no existe, intentar descargarlo
+            if not detail_lora_path.exists():
+                print("📥 Descargando LoRA de mejora de detalles...")
+                if not self._download_detail_enhancer_lora():
+                    print("⚠️  No se pudo descargar el LoRA de detalles, omitiendo...")
+                    return
+            
+            print(f"🎨 Aplicando LoRA de mejora de detalles (peso: {self.detail_enhancer_weight})")
+            
+            # Cargar LoRA usando el método de diffusers
+            pipe.load_lora_weights(
+                str(detail_lora_path.parent),
+                weight_name=detail_lora_path.name,
+                adapter_name="detail_enhancer",
+            )
+            
+            # Configurar peso del adaptador
+            pipe.set_adapters(["detail_enhancer"], adapter_weights=[self.detail_enhancer_weight])
+            
+            # Fusionar LoRA para mejor rendimiento (reduce VRAM)
+            pipe.fuse_lora()
+            
+            print("✅ LoRA de mejora de detalles aplicado")
+            
+        except Exception as e:
+            print(f"⚠️  Error al aplicar LoRA de detalles: {e}")
+            print("   Continuando sin LoRA de mejora de detalles...")
+    
+    def _download_detail_enhancer_lora(self):
+        """
+        Descarga el LoRA de mejora de detalles desde Civitai
+        
+        Returns:
+            bool: True si se descargó exitosamente
+        """
+        import requests
+        
+        detail_lora_path = config.LORA_DIR / "defaults" / "add_detail_lora.safetensors"
+        detail_lora_url = "https://civitai.com/api/download/models/82098?type=Model&format=SafeTensor"
+        
+        try:
+            print("   Conectando a Civitai...")
+            response = requests.get(detail_lora_url, stream=True, timeout=30)
+            response.raise_for_status()
+            
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(detail_lora_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            print(".1f", end='', flush=True)
+            
+            print("   ✅ Descarga completada")
+            
+            # Verificar que el archivo se descargó correctamente
+            if detail_lora_path.exists() and detail_lora_path.stat().st_size > 0:
+                print(f"   ✅ LoRA guardado en: {detail_lora_path}")
+                return True
+            else:
+                print("   ❌ El archivo descargado parece estar corrupto")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Error en descarga: {e}")
+            if detail_lora_path.exists():
+                detail_lora_path.unlink()  # Eliminar archivo incompleto
+            return False
+    
+    def set_detail_enhancer(self, enabled: bool, weight: float = 0.6):
+        """
+        Configura el LoRA de mejora de detalles
+        
+        Args:
+            enabled: Si activar el LoRA
+            weight: Peso del LoRA (0.0 a 1.0)
+        """
+        self.detail_enhancer_enabled = enabled
+        self.detail_enhancer_weight = weight
+        
+        # Si hay pipelines cargados, recargarlos con la nueva configuración
+        if self.txt2img_pipe is not None:
+            print("🔄 Recargando pipeline txt2img con nueva configuración de LoRA...")
+            self.unload_pipeline("txt2img")
+            self.load_txt2img_pipeline()
+        
+        if self.img2img_pipe is not None:
+            print("🔄 Recargando pipeline img2img con nueva configuración de LoRA...")
+            self.unload_pipeline("img2img")
+            self.load_img2img_pipeline()
     
     def load_img2img_pipeline(self):
         """Carga el pipeline de Image-to-Image"""
@@ -157,6 +269,11 @@ class StableDiffusionManager:
         pipe = pipe.to(self.device)
         self.img2img_pipe = pipe
         print("✅ Pipeline img2img listo")
+        
+        # Aplicar LoRA de mejora de detalles si está habilitado
+        if self.detail_enhancer_enabled:
+            self._apply_detail_enhancer_lora(pipe)
+        
         return pipe
     
     def load_inpaint_pipeline(self):
@@ -316,6 +433,27 @@ class StableDiffusionManager:
         )
         
         return result.images
+    
+    def change_model(self, new_model_id: str):
+        """
+        Cambia el modelo base y recarga los pipelines
+        
+        Args:
+            new_model_id: ID del modelo de HF o ruta local
+        """
+        if new_model_id == self.model_id:
+            print("ℹ️  El modelo ya está cargado")
+            return
+        
+        print(f"🔄 Cambiando modelo de '{self.model_id}' a '{new_model_id}'...")
+        
+        # Descargar pipelines actuales
+        self.unload_pipeline("all")
+        
+        # Actualizar modelo
+        self.model_id = new_model_id
+        
+        print("✅ Modelo cambiado. Los pipelines se recargarán automáticamente en la próxima generación.")
     
     def unload_pipeline(self, pipeline_type: str = "all"):
         """Libera memoria descargando pipelines"""
