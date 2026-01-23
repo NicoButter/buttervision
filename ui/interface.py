@@ -58,7 +58,7 @@ class ButterVisionUI:
         """Generación Text to Image simplificada"""
         try:
             # Cambiar modelo si es necesario
-            if model != self.sd_manager.current_model:
+            if model != self.sd_manager.model_id:
                 self.sd_manager.change_model(model)
 
             # Cargar pipeline
@@ -96,7 +96,7 @@ class ButterVisionUI:
                 return None, "❌ Sube una imagen inicial"
 
             # Cambiar modelo si necesario
-            if model != self.sd_manager.current_model:
+            if model != self.sd_manager.model_id:
                 self.sd_manager.change_model(model)
 
             # Cargar pipeline
