@@ -4,30 +4,79 @@ Pestañas: Text to Image, Image to Image, Train LoRA, Settings
 """
 import gradio as gr
 import random
+import requests
 from datetime import datetime
 from pathlib import Path
 from PIL import Image
 import config
 from core import StableDiffusionManager, lora_manager, ModelManager
+from core.advanced_pipeline import ButterVisionPipeline
 
 
 class ButterVisionUI:
     """Interfaz principal minimalista de ButterVision"""
 
     def __init__(self):
-        self.sd_manager = StableDiffusionManager()
+        # Usar pipeline avanzado con LoRA automático
+        self.sd_manager = ButterVisionPipeline(
+            model_id="runwayml/stable-diffusion-v1-5",
+            enable_optimizations=True,
+            enable_lcm=False
+        )
         self.lora_manager = lora_manager
         self.model_manager = ModelManager()
-        self.available_models = self._scan_models()
+        self.available_models = ["runwayml/stable-diffusion-v1-5"]  # Modelo fijo por ahora
     
     def update_detail_enhancer(self, enabled, weight):
-        """Actualiza la configuración del LoRA de mejora de detalles"""
+        """El LoRA de cara personal se carga automáticamente"""
+        return "ℹ️ El LoRA de cara personal (mi_cara.safetensors) se carga automáticamente si existe"
+
+    def download_lora_from_url(self, url):
+        """Descarga un LoRA desde una URL directa"""
+        if not url or not url.strip():
+            return "❌ Ingresa una URL válida"
+
         try:
-            self.sd_manager.set_detail_enhancer(enabled, weight)
-            status = f"✅ LoRA de detalles {'activado' if enabled else 'desactivado'} (peso: {weight})"
-            return status
+            # Ruta de destino
+            lora_path = Path("models/lora/defaults/lcm_lora.safetensors")
+
+            # Crear directorio si no existe
+            lora_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Eliminar archivo existente si hay
+            if lora_path.exists():
+                lora_path.unlink()
+
+            # Descargar archivo
+            response = requests.get(url.strip(), stream=True, timeout=30, allow_redirects=True)
+            response.raise_for_status()
+
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+
+            with open(lora_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+
+            # Validar archivo descargado
+            if lora_path.exists() and lora_path.stat().st_size > 0:
+                file_size_mb = lora_path.stat().st_size / (1024**2)
+                if lora_path.suffix == '.safetensors' and file_size_mb > 1.0:
+                    # Habilitar LoRA automáticamente
+                    self.sd_manager.detail_enhancer_enabled = True
+                    return f"✅ LoRA descargado exitosamente\n📏 Tamaño: {file_size_mb:.1f} MB\n📁 Ubicación: {lora_path}\n🎯 LoRA habilitado automáticamente"
+                else:
+                    lora_path.unlink()
+                    return f"❌ Archivo inválido: extensión={lora_path.suffix}, tamaño={file_size_mb:.1f} MB"
+            else:
+                return "❌ Error: archivo descargado corrupto"
+
+        except requests.exceptions.RequestException as e:
+            return f"❌ Error de conexión: {str(e)}"
         except Exception as e:
-            return f"❌ Error al actualizar LoRA: {str(e)}"
+            return f"❌ Error inesperado: {str(e)}"
 
     def _scan_models(self):
         """Escanea modelos locales disponibles"""
@@ -55,36 +104,34 @@ class ButterVisionUI:
         return saved_paths
 
     def txt2img_generate(self, prompt, negative_prompt, steps, cfg_scale, seed, model):
-        """Generación Text to Image simplificada"""
+        """Generación Text to Image con pipeline avanzado"""
         try:
-            # Cambiar modelo si es necesario
-            if model != self.sd_manager.model_id:
-                self.sd_manager.change_model(model)
-
-            # Cargar pipeline
-            pipe = self.sd_manager.load_txt2img_pipeline()
-
             # Seed aleatorio si -1
             if seed == -1:
                 seed = random.randint(0, 2**32 - 1)
 
-            # Generar
-            images = self.sd_manager.generate_txt2img(
+            # Generar usando pipeline avanzado
+            images = self.sd_manager.generate_image(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
-                steps=steps,
-                cfg_scale=cfg_scale,
+                num_inference_steps=steps,
+                guidance_scale=cfg_scale,
                 width=512,
                 height=512,
                 seed=seed,
                 num_images=1,
             )
 
+            # Test: Guardar imagen para verificar
+            if images and len(images) > 0:
+                images[0].save("test.png")
+                print(f"🧪 Test: Imagen guardada en test.png")
+
             # Guardar
             saved_paths = self._save_images(images, "txt2img", prompt, seed)
 
             info = f"✅ Generado con seed: {seed}\nGuardado en: {saved_paths[0].parent}"
-            return images, info
+            return images[0], info
 
         except Exception as e:
             return None, f"❌ Error: {str(e)}"
@@ -222,6 +269,18 @@ class ButterVisionUI:
                                 placeholder="Describe la imagen que quieres generar...",
                                 lines=3,
                             )
+
+                            # Ejemplos de prompts con cara personal
+                            gr.Markdown("""
+                            **💡 Ejemplos de prompts con tu cara:**
+                            - `foto de [tu nombre], cara realista, sonrisa, fondo neutro, alta calidad`
+                            - `[tu nombre] en un parque, iluminación natural, expresión feliz`
+                            - `retrato de [tu nombre], estilo profesional, iluminación de estudio`
+                            - `[tu nombre] con gafas, expresión seria, fondo blanco`
+
+                            *Reemplaza [tu nombre] con tu nombre real o usa "una persona"*
+                            """)
+
                             negative_prompt = gr.Textbox(
                                 label="Negative Prompt",
                                 placeholder="Elementos a evitar...",
@@ -230,7 +289,7 @@ class ButterVisionUI:
 
                         with gr.Column(scale=1):
                             steps = gr.Slider(20, 100, value=20, step=1, label="Steps")
-                            cfg_scale = gr.Slider(1, 20, value=7.5, step=0.5, label="CFG Scale")
+                            cfg_scale = gr.Slider(1, 20, value=5.0, step=0.5, label="CFG Scale")
                             seed = gr.Number(value=-1, label="Seed (-1 = random)")
                             with gr.Row():
                                 txt2img_model = gr.Dropdown(
@@ -242,14 +301,14 @@ class ButterVisionUI:
 
                     generate_btn = gr.Button("🚀 Generate", variant="primary", size="lg")
 
-                    gallery = gr.Gallery(label="Results", show_label=True, columns=2, height=400)
+                    image_output = gr.Image(type="pil", label="Generated Image", height=512)
 
                     info_text = gr.Textbox(label="Info", interactive=False, lines=2)
 
                     generate_btn.click(
                         fn=self.txt2img_generate,
                         inputs=[prompt, negative_prompt, steps, cfg_scale, seed, txt2img_model],
-                        outputs=[gallery, info_text]
+                        outputs=[image_output, info_text]
                     )
 
                     refresh_model_btn.click(
@@ -318,6 +377,30 @@ class ButterVisionUI:
                     **LoRA (Low-Rank Adaptation)** permite entrenar un modelo personalizado con tus fotos.
                     El resultado será un archivo pequeño que puedes usar para generar imágenes de ti mismo.
                     """)
+
+                    # Sección para descargar LoRA existente
+                    gr.Markdown("### 📥 Descargar LoRA Existente")
+                    with gr.Row():
+                        lora_url = gr.Textbox(
+                            label="URL del LoRA",
+                            placeholder="https://huggingface.co/.../lora.safetensors",
+                            info="Pega aquí el enlace directo al archivo .safetensors del LoRA"
+                        )
+                        download_lora_btn = gr.Button("📥 Descargar LoRA", variant="secondary")
+
+                    download_status = gr.Textbox(
+                        label="Estado de descarga",
+                        interactive=False,
+                        placeholder="Aquí aparecerá el estado de la descarga..."
+                    )
+
+                    download_lora_btn.click(
+                        fn=self.download_lora_from_url,
+                        inputs=[lora_url],
+                        outputs=[download_status]
+                    )
+
+                    gr.Markdown("---")
 
                     with gr.Row():
                         with gr.Column():

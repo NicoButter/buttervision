@@ -43,7 +43,7 @@ class LoRAManager:
         Asegura que el LoRA de mejora de detalles esté disponible
         Lo descarga automáticamente si no existe
         """
-        detail_lora_path = self.defaults_dir / "add_detail_lora.safetensors"
+        detail_lora_path = self.defaults_dir / "lcm_lora.safetensors"
         detail_lora_url = "https://civitai.com/api/download/models/82098?type=Model&format=SafeTensor"
         
         if detail_lora_path.exists():

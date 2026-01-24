@@ -33,18 +33,18 @@ class ModelConfig:
     # "stabilityai/stable-diffusion-xl-base-1.0"
     
     # Optimizaciones de memoria
-    use_fp16: bool = True  # float16 para ahorrar VRAM
-    enable_xformers: bool = True  # xformers memory efficient attention
+    use_fp16: bool = False  # DESACTIVADO para GTX 1650 (evita type mismatches)
+    enable_xformers: bool = False  # xformers DESACTIVADO para GTX 1650 (causa NaNs)
     enable_attention_slicing: bool = True  # Divide attention en chunks
     enable_vae_slicing: bool = True  # Procesa VAE en batches
     enable_cpu_offload: bool = False  # Offload a CPU (más lento pero ahorra VRAM)
     
     # Parámetros por defecto de generación
     default_steps: int = 30
-    default_cfg_scale: float = 7.5
+    default_cfg_scale: float = 5.0  # Reducido para estabilidad en GTX 1650
     default_width: int = 512
     default_height: int = 512
-    default_scheduler: str = "DPMSolverMultistepScheduler"  # Rápido y bueno
+    default_scheduler: str = "DDIMScheduler"  # Más estable en GTX 1650
     
     # Seguridad
     safety_checker: bool = False  # Desactivado por defecto (ahorra VRAM)

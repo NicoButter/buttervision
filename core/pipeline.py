@@ -60,13 +60,57 @@ class StableDiffusionManager:
         # Estado
         self.current_scheduler = config.model_config.default_scheduler
         self.loaded_loras = {}  # {nombre: peso}
-        self.detail_enhancer_enabled = True  # LoRA de detalles activado por defecto
+        self.detail_enhancer_enabled = False  # LoRA deshabilitado - el usuario debe descargarlo manualmente para entrenamiento
         self.detail_enhancer_weight = 0.6   # Peso por defecto
         
         print(f"🎨 ButterVision iniciando...")
         print(f"📦 Modelo: {self.model_id}")
         print(f"🔧 Dispositivo: {self.device}")
         print(f"⚡ Optimizaciones: {'Activadas' if enable_optimizations else 'Desactivadas'}")
+        
+        # Precargar modelo y LoRA
+        self.preload()
+    
+    def preload(self):
+        """
+        Precarga el modelo base y el LoRA de mejora de detalles
+        para que estén disponibles inmediatamente
+        """
+        print("📥 Precargando recursos...")
+        
+        try:
+            # 1. Verificar/descargar modelo base
+            print("   Verificando modelo base...")
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                self.model_id,
+                cache_dir=str(config.model_config.cache_dir),
+                local_files_only=False,
+                resume_download=True
+            )
+            print("   ✅ Modelo base disponible")
+            
+        except Exception as e:
+            print(f"   ⚠️  Error al verificar modelo: {e}")
+            print("   Continuando (se descargará cuando sea necesario)")
+        
+        # 2. Verificar LoRA de detalles (opcional para entrenamiento)
+        if self.detail_enhancer_enabled:
+            print("   Verificando LoRA de mejora de detalles...")
+            detail_lora_path = config.LORA_DIR / "defaults" / "lcm_lora.safetensors"
+            if not detail_lora_path.exists():
+                print("   Descargando LoRA...")
+                if self._download_detail_enhancer_lora():
+                    print("   ✅ LoRA disponible")
+                else:
+                    print("   ⚠️  No se pudo descargar LoRA, deshabilitando...")
+                    self.detail_enhancer_enabled = False
+            else:
+                print("   ✅ LoRA ya disponible")
+        else:
+            print("   ℹ️  LoRA deshabilitado (consulta models/lora/defaults/README.md para uso opcional)")
+        
+        print("✅ Precarga completada")
     
     def _apply_optimizations(self, pipe):
         """Aplica optimizaciones de memoria al pipeline"""
@@ -142,9 +186,7 @@ class StableDiffusionManager:
             pipe: Pipeline de Stable Diffusion
         """
         try:
-            detail_lora_path = config.LORA_DIR / "defaults" / "add_detail_lora.safetensors"
-            
-            # Si no existe, intentar descargarlo
+            detail_lora_path = config.LORA_DIR / "defaults" / "lcm_lora.safetensors"
             if not detail_lora_path.exists():
                 print("📥 Descargando LoRA de mejora de detalles...")
                 if not self._download_detail_enhancer_lora():
@@ -174,48 +216,10 @@ class StableDiffusionManager:
     
     def _download_detail_enhancer_lora(self):
         """
-        Descarga el LoRA de mejora de detalles desde Civitai
-        
-        Returns:
-            bool: True si se descargó exitosamente
+        Descarga del LoRA deshabilitada - el usuario debe hacerlo manualmente
         """
-        import requests
-        
-        detail_lora_path = config.LORA_DIR / "defaults" / "add_detail_lora.safetensors"
-        detail_lora_url = "https://civitai.com/api/download/models/82098?type=Model&format=SafeTensor"
-        
-        try:
-            print("   Conectando a Civitai...")
-            response = requests.get(detail_lora_url, stream=True, timeout=30)
-            response.raise_for_status()
-            
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            
-            with open(detail_lora_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = (downloaded / total_size) * 100
-                            print(".1f", end='', flush=True)
-            
-            print("   ✅ Descarga completada")
-            
-            # Verificar que el archivo se descargó correctamente
-            if detail_lora_path.exists() and detail_lora_path.stat().st_size > 0:
-                print(f"   ✅ LoRA guardado en: {detail_lora_path}")
-                return True
-            else:
-                print("   ❌ El archivo descargado parece estar corrupto")
-                return False
-                
-        except Exception as e:
-            print(f"   ❌ Error en descarga: {e}")
-            if detail_lora_path.exists():
-                detail_lora_path.unlink()  # Eliminar archivo incompleto
-            return False
+        print("   ℹ️  Descarga automática deshabilitada. Descarga manualmente si necesitas LoRA para entrenamiento.")
+        return False
     
     def set_detail_enhancer(self, enabled: bool, weight: float = 0.6):
         """
@@ -384,6 +388,10 @@ class StableDiffusionManager:
         
         # Generar
         print(f"🎨 Generando {num_images} imagen(es)...")
+        
+        def progress_callback(step, timestep, latents):
+            print(f"   Paso {step+1}/{steps}")
+        
         result = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt if negative_prompt else None,
@@ -393,6 +401,8 @@ class StableDiffusionManager:
             height=height,
             num_images_per_prompt=num_images,
             generator=generator,
+            callback=progress_callback,
+            callback_steps=1,
         )
         
         return result.images
@@ -422,6 +432,10 @@ class StableDiffusionManager:
             generator = torch.Generator(device=self.device).manual_seed(seed)
         
         print(f"🖼️  Transformando imagen...")
+        
+        def progress_callback(step, timestep, latents):
+            print(f"   Paso {step+1}/{steps}")
+        
         result = pipe(
             prompt=prompt,
             image=init_image,
@@ -430,6 +444,8 @@ class StableDiffusionManager:
             guidance_scale=cfg_scale,
             strength=strength,
             generator=generator,
+            callback=progress_callback,
+            callback_steps=1,
         )
         
         return result.images

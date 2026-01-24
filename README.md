@@ -197,6 +197,38 @@ buttervision/
 3. Selecciona hasta 2 LoRAs simultáneos
 4. Ajusta sus pesos (0.0 a 2.0, típico 0.5-1.0)
 
+### 🎭 LoRA de Cara Personal
+
+ButterVision incluye soporte especial para entrenar y usar un LoRA de tu propia cara:
+
+#### Preparar Dataset
+```bash
+# Crear directorio para fotos
+mkdir -p data/mi_cara
+
+# Coloca 15-30 fotos de tu cara (formatos: .jpg, .png)
+# Variedad: ángulos, iluminación, expresiones
+```
+
+#### Entrenar LoRA
+```bash
+# Verificar configuración
+python check_lora_setup.py
+
+# Entrenar LoRA (30-60 minutos en GTX 1650)
+python train_lora_mi_cara.py
+
+# O con parámetros personalizados
+python train_lora_mi_cara.py --steps 2000 --lr 5e-5
+```
+
+#### Usar en Generación
+El LoRA se carga automáticamente. Usa prompts como:
+- `foto de [tu nombre], cara realista, sonrisa, fondo neutro`
+- `[tu nombre] en un parque, iluminación natural`
+
+Ver [LORA_TRAINING_README.md](LORA_TRAINING_README.md) para guía completa.
+
 ## 🔧 Configuración avanzada
 
 ### Cambiar modelo base
