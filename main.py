@@ -236,6 +236,7 @@ def main():
     
     # Crear interfaz
     from ui import create_ui
+    from ui.interface import get_ui_css, get_ui_js
 
     print("🚀 Iniciando interfaz web...\n")
     interface = create_ui()
@@ -248,6 +249,8 @@ def main():
         "inbrowser": False,  # No abrir navegador automáticamente
         "show_error": config.ui_config.show_error,
         "theme": gr.themes.Soft(),
+        "css": get_ui_css(),
+        "js": get_ui_js(),
         "footer_links": [],
     }
     
