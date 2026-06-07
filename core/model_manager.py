@@ -11,6 +11,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from huggingface_hub import HfApi, snapshot_download
 import config
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 
 class ModelManager:
     """Administrador de modelos Stable Diffusion"""
@@ -21,14 +26,26 @@ class ModelManager:
 
     def list_local_models(self) -> List[str]:
         """Lista modelos locales disponibles."""
+        return [model["name"] for model in self.list_local_model_infos()]
+
+    def list_local_model_infos(self) -> List[Dict[str, object]]:
+        """Lista modelos locales con nombre, ruta y tamaño."""
         models = []
         if self.models_dir.exists():
             for item in self.models_dir.iterdir():
                 if item.is_dir() and self.is_diffusers_model_dir(item):
-                    models.append(item.name)
+                    models.append({
+                        "name": item.name,
+                        "path": str(item),
+                        "size_bytes": self.get_model_size_bytes(item),
+                    })
                 elif self.is_single_file_model(item):
-                    models.append(item.stem)
-        return models
+                    models.append({
+                        "name": item.stem,
+                        "path": str(item),
+                        "size_bytes": item.stat().st_size,
+                    })
+        return sorted(models, key=lambda model: str(model["name"]).lower())
 
     def _local_name_for_model(self, model_id: str) -> str:
         """Convierte un repo id de Hugging Face en un nombre local estable."""
@@ -49,6 +66,44 @@ class ModelManager:
     def is_single_file_model(self, path: Path) -> bool:
         """Valida checkpoints tipo Forge/Automatic1111."""
         return path.is_file() and path.suffix.lower() in {".safetensors", ".ckpt"}
+
+    def get_model_size_bytes(self, path: Path) -> int:
+        """Calcula el tamaño en disco de un modelo archivo o carpeta."""
+        if path.is_file():
+            return path.stat().st_size
+        if path.is_dir():
+            return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+        return 0
+
+    def get_vram_bytes(self) -> Optional[int]:
+        """Retorna VRAM total de la GPU principal si CUDA está disponible."""
+        if torch is None or not torch.cuda.is_available():
+            return None
+        return torch.cuda.get_device_properties(0).total_memory
+
+    def model_fits_gpu(self, size_bytes: int, vram_bytes: Optional[int] = None) -> Optional[bool]:
+        """Compatibilidad simple: tamaño del modelo <= VRAM total."""
+        if vram_bytes is None:
+            vram_bytes = self.get_vram_bytes()
+        if vram_bytes is None:
+            return None
+        return size_bytes <= vram_bytes
+
+    def get_model_info(self, model_id: str) -> Optional[Dict[str, object]]:
+        """Obtiene metadata del modelo resuelto localmente."""
+        model_path = self.resolve_model_path(model_id)
+        if not model_path:
+            return None
+
+        path = Path(model_path)
+        size_bytes = self.get_model_size_bytes(path)
+        return {
+            "name": path.stem if path.is_file() else path.name,
+            "path": str(path),
+            "size_bytes": size_bytes,
+            "fits_gpu": self.model_fits_gpu(size_bytes),
+            "vram_bytes": self.get_vram_bytes(),
+        }
 
     def _format_bytes(self, value: float) -> str:
         """Formatea bytes en unidades legibles."""

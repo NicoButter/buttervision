@@ -10,17 +10,75 @@ import gradio as gr
 
 import config
 from core.advanced_pipeline import ButterVisionPipeline
+from core.model_manager import ModelManager
 
 
 class ButterVisionUI:
     """Interfaz principal enfocada únicamente en Text-to-Image."""
 
     def __init__(self):
+        self.model_manager = ModelManager()
+        self.model_choices = self._get_model_choices()
         self.sd_manager = ButterVisionPipeline(
             model_id=config.model_config.model_id,
             enable_optimizations=True,
             enable_lcm=False,
         )
+
+    def _get_model_choices(self):
+        """Retorna modelos locales detectados y asegura que el activo esté presente."""
+        choices = [model["path"] for model in self.model_manager.list_local_model_infos()]
+        active_model = config.model_config.model_id
+        resolved_active = self.model_manager.resolve_model_path(active_model) or active_model
+
+        if resolved_active not in choices:
+            choices.insert(0, resolved_active)
+
+        return choices
+
+    def _format_model_label(self, model_path):
+        """Muestra un nombre breve para el selector."""
+        path = Path(model_path)
+        return path.stem if path.suffix else path.name
+
+    def _model_status_html(self, model_id):
+        """Genera indicador visual de compatibilidad modelo/VRAM."""
+        info = self.model_manager.get_model_info(model_id)
+        if info is None:
+            return (
+                "<div class='model-status model-status-warn'>"
+                "Modelo no encontrado"
+                "</div>"
+            )
+
+        if info["fits_gpu"] is True:
+            return "<div class='model-status model-status-ok'>Compatible con la GPU</div>"
+        elif info["fits_gpu"] is False:
+            return "<div class='model-status model-status-bad'>No compatible con la GPU</div>"
+
+        return "<div class='model-status model-status-warn'>Compatibilidad no determinada</div>"
+
+    def refresh_models(self):
+        """Actualiza lista de modelos locales y el indicador."""
+        self.model_choices = self._get_model_choices()
+        current_model = self.sd_manager.model_id
+        if current_model not in self.model_choices:
+            current_model = self.model_choices[0] if self.model_choices else current_model
+        return (
+            gr.update(choices=self.model_choices, value=current_model),
+            self._model_status_html(current_model),
+        )
+
+    def select_model(self, model_id):
+        """Cambia el modelo activo para la próxima generación."""
+        if not model_id:
+            return self._model_status_html(self.sd_manager.model_id)
+
+        if model_id != self.sd_manager.model_id:
+            self.sd_manager.change_model(model_id)
+            config.model_config.model_id = model_id
+
+        return self._model_status_html(model_id)
 
     def _save_images(self, images, seed):
         """Guarda imágenes generadas en outputs/txt2img."""
@@ -85,8 +143,76 @@ class ButterVisionUI:
 
     def create_interface(self):
         """Crea la interfaz Text-to-Image."""
-        with gr.Blocks(title="ButterVision - Text to Image") as interface:
-            gr.Markdown("# ButterVision")
+        css = """
+        .topbar {
+            align-items: center;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: #ffffff;
+            margin-bottom: 12px;
+        }
+        .brand {
+            font-size: 18px;
+            font-weight: 700;
+            color: #111827;
+            line-height: 1;
+            padding-top: 8px;
+        }
+        .topbar .form {
+            border: 0;
+            background: transparent;
+            padding: 0;
+        }
+        .topbar label {
+            font-size: 11px;
+            color: #6b7280;
+        }
+        .topbar .model-status {
+            min-height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+            padding: 0 12px;
+            border: 1px solid;
+        }
+        .model-status-ok {
+            color: #166534;
+            background: #ecfdf5;
+            border-color: #86efac;
+        }
+        .model-status-bad {
+            color: #991b1b;
+            background: #fef2f2;
+            border-color: #fca5a5;
+        }
+        .model-status-warn {
+            color: #92400e;
+            background: #fffbeb;
+            border-color: #fcd34d;
+        }
+        """
+
+        with gr.Blocks(title="ButterVision - Text to Image", css=css) as interface:
+
+            active_model = self.sd_manager.model_id
+            with gr.Row(elem_classes=["topbar"]):
+                with gr.Column(scale=1, min_width=150):
+                    gr.HTML("<div class='brand'>ButterVision</div>")
+                with gr.Column(scale=4, min_width=320):
+                    model_selector = gr.Dropdown(
+                        choices=self.model_choices,
+                        value=active_model,
+                        label="Modelo actual",
+                    )
+                with gr.Column(scale=0, min_width=56):
+                    refresh_models_btn = gr.Button("↻", size="sm")
+                with gr.Column(scale=2, min_width=220):
+                    model_status = gr.HTML(value=self._model_status_html(active_model))
 
             with gr.Row():
                 with gr.Column(scale=2):
@@ -150,6 +276,18 @@ class ButterVisionUI:
                     seed,
                 ],
                 outputs=[image_output, info_text],
+            )
+
+            model_selector.change(
+                fn=self.select_model,
+                inputs=[model_selector],
+                outputs=[model_status],
+            )
+
+            refresh_models_btn.click(
+                fn=self.refresh_models,
+                inputs=[],
+                outputs=[model_selector, model_status],
             )
 
         return interface
