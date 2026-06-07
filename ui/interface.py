@@ -359,19 +359,23 @@ class ButterVisionUI:
 
     def _get_model_choices(self):
         """Retorna modelos locales detectados y asegura que el activo esté presente."""
-        choices = [model["path"] for model in self.model_manager.list_local_model_infos()]
+        model_paths = [model["path"] for model in self.model_manager.list_local_model_infos()]
         active_model = config.model_config.model_id
         resolved_active = self.model_manager.resolve_model_path(active_model) or active_model
 
-        if resolved_active not in choices:
-            choices.insert(0, resolved_active)
+        if resolved_active not in model_paths:
+            model_paths.insert(0, resolved_active)
 
-        return choices
+        return [(self._format_model_label(model_path), model_path) for model_path in model_paths]
+
+    def _get_model_choice_values(self):
+        """Retorna las rutas reales usadas como valores del selector."""
+        return [choice[1] if isinstance(choice, tuple) else choice for choice in self.model_choices]
 
     def _format_model_label(self, model_path):
         """Muestra un nombre breve para el selector."""
         path = Path(model_path)
-        return path.stem if path.suffix else path.name
+        return path.name
 
     def _model_status_html(self, model_id):
         """Genera indicador visual de compatibilidad modelo/VRAM."""
@@ -393,9 +397,10 @@ class ButterVisionUI:
     def refresh_models(self):
         """Actualiza lista de modelos locales y el indicador."""
         self.model_choices = self._get_model_choices()
+        model_values = self._get_model_choice_values()
         current_model = self.sd_manager.model_id
-        if current_model not in self.model_choices:
-            current_model = self.model_choices[0] if self.model_choices else current_model
+        if current_model not in model_values:
+            current_model = model_values[0] if model_values else current_model
         return (
             gr.update(choices=self.model_choices, value=current_model),
             self._model_status_html(current_model),
