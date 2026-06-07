@@ -4,6 +4,7 @@ Descarga y gestión de modelos desde Hugging Face y CivitAI
 """
 import os
 import requests
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -48,6 +49,57 @@ class ModelManager:
     def is_single_file_model(self, path: Path) -> bool:
         """Valida checkpoints tipo Forge/Automatic1111."""
         return path.is_file() and path.suffix.lower() in {".safetensors", ".ckpt"}
+
+    def _format_bytes(self, value: float) -> str:
+        """Formatea bytes en unidades legibles."""
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(value)
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+
+        return f"{size:.1f} TB"
+
+    def _format_duration(self, seconds: float) -> str:
+        """Formatea segundos como mm:ss u hh:mm:ss."""
+        if seconds <= 0 or seconds == float("inf"):
+            return "--:--"
+
+        seconds = int(seconds)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _print_download_progress(self, downloaded: int, total_size: int, start_time: float, force: bool = False):
+        """Imprime una línea de progreso con tamaño, velocidad y ETA."""
+        now = time.monotonic()
+        if not force and now - getattr(self, "_last_progress_print", 0.0) < 0.5:
+            return
+
+        self._last_progress_print = now
+        elapsed = max(now - start_time, 0.001)
+        speed = downloaded / elapsed
+
+        if total_size:
+            percent = min(downloaded * 100 / total_size, 100.0)
+            remaining = max(total_size - downloaded, 0)
+            eta = remaining / speed if speed > 0 else float("inf")
+            line = (
+                f"\r   {percent:6.2f}% | "
+                f"{self._format_bytes(downloaded)} / {self._format_bytes(total_size)} | "
+                f"{self._format_bytes(speed)}/s | ETA {self._format_duration(eta)}"
+            )
+        else:
+            line = (
+                f"\r   {self._format_bytes(downloaded)} descargados | "
+                f"{self._format_bytes(speed)}/s | ETA --:--"
+            )
+
+        print(line, end="", flush=True)
 
     def _default_model_path(self) -> Path:
         return self.models_dir / config.model_config.default_model_filename
@@ -175,6 +227,11 @@ class ModelManager:
         print(f"   Destino: {local_path}")
 
         try:
+            resume_from = partial_path.stat().st_size if partial_path.exists() else 0
+            if resume_from:
+                headers["Range"] = f"bytes={resume_from}-"
+                print(f"   Reanudando desde: {self._format_bytes(resume_from)}")
+
             response = requests.get(
                 request_url,
                 stream=True,
@@ -189,21 +246,31 @@ class ModelManager:
                 )
             response.raise_for_status()
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
+            content_length = int(response.headers.get("content-length", 0))
+            if response.status_code == 206 and content_length:
+                total_size = resume_from + content_length
+                file_mode = "ab"
+            else:
+                if resume_from:
+                    print("   El servidor no reanudó la descarga; comenzando desde cero.")
+                total_size = content_length
+                downloaded = 0
+                file_mode = "wb"
 
-            with open(partial_path, "wb") as file:
+            downloaded = resume_from if file_mode == "ab" else 0
+            start_time = time.monotonic()
+            self._last_progress_print = 0.0
+
+            with open(partial_path, file_mode) as file:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if not chunk:
                         continue
                     file.write(chunk)
                     downloaded += len(chunk)
-                    if total_size:
-                        percent = downloaded * 100 / total_size
-                        print(f"\r   Progreso: {percent:5.1f}%", end="", flush=True)
+                    self._print_download_progress(downloaded, total_size, start_time)
 
-            if total_size:
-                print()
+            self._print_download_progress(downloaded, total_size, start_time, force=True)
+            print()
 
             if partial_path.stat().st_size < 1024 * 1024:
                 raise Exception("El archivo descargado es demasiado pequeño para ser un modelo válido")

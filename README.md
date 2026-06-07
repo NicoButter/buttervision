@@ -77,6 +77,8 @@ pip install xformers
 
 En el primer arranque, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors`, descargado desde el backup público de Hugging Face de CyberRealistic.
 
+Durante la descarga verás progreso en la terminal con porcentaje, tamaño descargado, tamaño total, velocidad y ETA. Si la descarga se interrumpe, ButterVision intenta reanudar el archivo `.part` en el siguiente arranque.
+
 La página de CivitAI puede pedir autenticación, por eso el launcher usa Hugging Face como fuente principal. Si aun así quieres usar CivitAI, crea un API token en tu cuenta y ejecútalo así:
 
 ```bash
