@@ -29,7 +29,8 @@ class ModelConfig:
     # Modelo base por defecto. ButterVision lo descarga en el primer arranque si falta.
     model_id: str = "cyberrealistic_final"
     default_model_filename: str = "cyberrealistic_final.safetensors"
-    default_model_url: str = "https://civitai.com/api/download/models/2681234?fileId=2567874"
+    default_model_url: str = "https://huggingface.co/cyberdelia/CyberRealistic/resolve/main/CyberRealistic_FINAL_FP16.safetensors"
+    civitai_model_url: str = "https://civitai.com/api/download/models/2681234?fileId=2567874"
     # También puedes usar un repo Hugging Face compatible, por ejemplo:
     # "runwayml/stable-diffusion-v1-5"
     
@@ -38,7 +39,7 @@ class ModelConfig:
     enable_xformers: bool = False  # xformers DESACTIVADO para GTX 1650 (causa NaNs)
     enable_attention_slicing: bool = True  # Divide attention en chunks
     enable_vae_slicing: bool = True  # Procesa VAE en batches
-    enable_cpu_offload: bool = False  # Offload a CPU (más lento pero ahorra VRAM)
+    enable_cpu_offload: bool = True  # Offload a CPU (más lento pero ahorra VRAM)
     
     # Parámetros por defecto de generación
     default_steps: int = 30

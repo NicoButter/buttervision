@@ -11,57 +11,56 @@ bash install.sh cuda118    # Para CUDA 11.8
 # O para Windows: install.bat cuda118
 
 # 3. Lanzar
-source venv/bin/activate   # Linux/Mac
-# O en Windows: venv\Scripts\activate.bat
-python main.py --medvram
+./run.sh
+# O en Windows: run.bat
 ```
 
 ## Comandos esenciales
 
 ```bash
 # Inicio básico
-python main.py
+./run.sh
 
 # GPU con 4GB VRAM
-python main.py --lowvram
+./run.sh --lowvram
 
 # GPU con 6GB VRAM
-python main.py --medvram
+./run.sh --medvram
 
 # Compartir públicamente
-python main.py --share
+./run.sh --share
 
 # Con autenticación
-python main.py --auth usuario:password --share
+./run.sh --auth usuario:password --share
 
 # Modelo diferente
-python main.py --model "stabilityai/stable-diffusion-2-1"
+./run.sh --model "stabilityai/stable-diffusion-2-1"
 ```
 
 ## Estructura rápida
 
 ```
 buttervision/
-├── main.py              # Ejecutar esto
+├── main.py              # Punto de entrada interno
 ├── config.py            # Configuración
 ├── requirements.txt     # Dependencias
 │
 ├── core/                # Motor
-│   ├── pipeline.py      # Generación
-│   └── lora_manager.py  # LoRAs
+│   ├── advanced_pipeline.py # Generación txt2img
+│   └── model_manager.py     # Descarga/resolución de modelos
 │
 ├── ui/                  # Interfaz
 │   └── interface.py
 │
 ├── models/              # Recursos
-│   └── lora/           # Pon LoRAs aquí
+│   └── stable-diffusion/
 │
 └── outputs/             # Imágenes generadas
 ```
 
 ## Flujo típico
 
-1. **Lanzar**: `python main.py --medvram`
+1. **Lanzar**: `./run.sh`
 2. **Abrir**: http://localhost:7860
 3. **Prompt**: "a beautiful landscape, oil painting"
 4. **Generate** → Esperar → ¡Listo!
@@ -84,20 +83,14 @@ buttervision/
 - Mantener resolución baja
 - Scheduler: DPM++ o Euler
 
-### Añadir LoRAs
-1. Descargar `.safetensors` de CivitAI
-2. Copiar a `models/lora/`
-3. Refrescar en UI
-4. Seleccionar y generar
-
 ## Solución rápida de problemas
 
 | Problema | Solución |
 |----------|----------|
-| Out of memory | `python main.py --lowvram` |
+| Out of memory | `./run.sh --lowvram` |
 | Muy lento | Instalar xformers: `pip install xformers` |
 | No encuentra GPU | Reinstalar PyTorch con CUDA |
-| Modelo no descarga | Verificar conexión, esperar (son ~4GB) |
+| Modelo no descarga | Configurar `CIVITAI_API_TOKEN` o colocar el `.safetensors` manualmente |
 
 ## Verificación de instalación
 

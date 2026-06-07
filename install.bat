@@ -93,12 +93,11 @@ echo.
 echo ✅ ¡Instalacion completada!
 echo.
 echo Para iniciar ButterVision:
-echo   1. Activa el entorno: venv\Scripts\activate.bat
-echo   2. Ejecuta: python main.py
+echo   run.bat
 echo.
 echo Opciones utiles:
-echo   python main.py --lowvram    REM Para GPUs con ^< 4GB VRAM
-echo   python main.py --medvram    REM Para GPUs con 4-6GB VRAM
-echo   python main.py --share      REM Crear link publico
+echo   run.bat --port 7861
+echo   run.bat --share
+echo   run.bat --skip-model-download
 echo.
 pause

@@ -189,11 +189,20 @@ class ButterVisionPipeline:
         pipeline.enable_vae_slicing()
         print("✅ VAE slicing activado")
 
-        # 6. CPU offload como último recurso (si VRAM muy baja)
-        # Solo activar si es necesario
-        # pipeline.enable_sequential_cpu_offload()
+        # 6. CPU offload para GPUs de 4GB o menos
+        if config.model_config.enable_cpu_offload and self.device == "cuda":
+            pipeline.enable_sequential_cpu_offload()
+            print("✅ CPU offload secuencial activado")
 
         return pipeline
+
+    def _prepare_pipeline_device(self, pipeline):
+        """Mueve el pipeline al dispositivo respetando el modo low-VRAM."""
+        if config.model_config.enable_cpu_offload and self.device == "cuda":
+            return self._apply_vram_optimizations(pipeline)
+
+        pipeline = pipeline.to(self.device)
+        return self._apply_vram_optimizations(pipeline)
 
     def load_sd_pipeline(self) -> StableDiffusionPipeline:
         """Carga el pipeline de Stable Diffusion con optimizaciones"""
@@ -240,8 +249,7 @@ class ButterVisionPipeline:
         pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
         print("✅ DDIM Scheduler forzado (estable para GTX 1650)")
 
-        pipeline = pipeline.to(self.device)
-        pipeline = self._apply_vram_optimizations(pipeline)
+        pipeline = self._prepare_pipeline_device(pipeline)
 
         # Cargar LCM LoRA si está habilitado
         if self.enable_lcm:
@@ -291,8 +299,7 @@ class ButterVisionPipeline:
         # Configurar scheduler para videos
         pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-        pipeline = pipeline.to(self.device)
-        pipeline = self._apply_vram_optimizations(pipeline)
+        pipeline = self._prepare_pipeline_device(pipeline)
 
         self.animatediff_pipeline = pipeline
         print("✅ Pipeline AnimateDiff listo")
@@ -335,12 +342,10 @@ class ButterVisionPipeline:
                     cache_dir=str(config.model_config.cache_dir),
                 )
             pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
-            pipeline = pipeline.to(self.device)
-            pipeline = self._apply_vram_optimizations(pipeline)
+            pipeline = self._prepare_pipeline_device(pipeline)
 
         if self.sd_pipeline is not None:
-            pipeline = pipeline.to(self.device)
-            pipeline = self._apply_vram_optimizations(pipeline)
+            pipeline = self._prepare_pipeline_device(pipeline)
 
         self.img2img_pipeline = pipeline
         print("✅ Pipeline img2img listo")

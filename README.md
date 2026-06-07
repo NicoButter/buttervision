@@ -72,16 +72,16 @@ pip install xformers
 ### Inicio básico
 
 ```bash
-python main.py
+./run.sh
 ```
 
-En el primer arranque, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors` desde CivitAI.
+En el primer arranque, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors`, descargado desde el backup público de Hugging Face de CyberRealistic.
 
-Si CivitAI pide autenticación para el checkpoint, crea un API token en tu cuenta y ejecútalo así:
+La página de CivitAI puede pedir autenticación, por eso el launcher usa Hugging Face como fuente principal. Si aun así quieres usar CivitAI, crea un API token en tu cuenta y ejecútalo así:
 
 ```bash
 export CIVITAI_API_TOKEN="tu_token"
-python main.py
+./run.sh
 ```
 
 También puedes descargarlo manualmente y colocarlo en:
@@ -92,67 +92,73 @@ models/stable-diffusion/cyberrealistic_final.safetensors
 
 La interfaz se abrirá automáticamente en: `http://localhost:7860`
 
+En Windows, usa:
+
+```bat
+run.bat
+```
+
 ### Opciones de línea de comandos
 
 #### Configuración del servidor
 
 ```bash
 # Cambiar puerto
-python main.py --port 7861
+./run.sh --port 7861
 
 # Crear share link público (Gradio)
-python main.py --share
+./run.sh --share
 
 # Añadir autenticación
-python main.py --auth usuario:contraseña
+./run.sh --auth usuario:contraseña
 
 # Cambiar host
-python main.py --host 127.0.0.1
+./run.sh --host 127.0.0.1
 ```
 
 #### Optimizaciones de VRAM
 
 ```bash
 # GPU con poca VRAM (< 4GB) - Activa todas las optimizaciones + CPU offload
-python main.py --lowvram
+./run.sh --lowvram
 
 # GPU con VRAM media (4-6GB) - Optimizaciones sin CPU offload
-python main.py --medvram
+./run.sh --medvram
 
 # Desactivar todas las optimizaciones (para debugging)
-python main.py --no-optimizations
+./run.sh --no-optimizations
 ```
 
 #### Configuración del modelo
 
 ```bash
 # Usar un modelo diferente
-python main.py --model "stabilityai/stable-diffusion-2-1"
+./run.sh --model "stabilityai/stable-diffusion-2-1"
 
 # Modo offline estricto: no descargar modelos al arrancar
-python main.py --skip-model-download
+./run.sh --skip-model-download
 
 # Desactivar float16 (usa más VRAM)
-python main.py --no-fp16
+./run.sh --no-fp16
 
 # Desactivar xformers
-python main.py --no-xformers
+./run.sh --no-xformers
 ```
 
 #### Combinaciones útiles
 
 ```bash
 # Para GPU de 4GB (ej: GTX 1650)
-python main.py --lowvram --share
+./run.sh --lowvram --share
 
 # Para GPU de 6GB (ej: RTX 3060)
-python main.py --medvram
+./run.sh --medvram
 
 # Para GPU de 8GB+ (ej: RTX 3070)
-python main.py
+./run.sh
 
 # Usar modelo SD 2.1 con optimizaciones
-python main.py --model "stabilityai/stable-diffusion-2-1" --medvram
+./run.sh --model "stabilityai/stable-diffusion-2-1" --medvram
 ```
 
 ## 📁 Estructura del proyecto
@@ -291,7 +297,7 @@ Crea scripts Python en la carpeta `extensions/` para añadir funcionalidades per
 
 ```bash
 # Prueba con optimizaciones más agresivas
-python main.py --lowvram
+./run.sh --lowvram
 
 # O reduce la resolución de generación
 # Usa 384x384 o 448x448 en lugar de 512x512
@@ -304,7 +310,7 @@ python main.py --lowvram
 pip install xformers
 
 # O desactívalo si da problemas
-python main.py --no-xformers
+./run.sh --no-xformers
 ```
 
 ### El modelo se descarga muy lento

@@ -184,8 +184,8 @@ class ModelManager:
             )
             if response.status_code == 401:
                 raise Exception(
-                    "CivitAI respondió 401 Unauthorized. Este modelo requiere login/API token. "
-                    "Crea un token en CivitAI y ejecuta: export CIVITAI_API_TOKEN=tu_token"
+                    "La descarga respondió 401 Unauthorized. Si usas una URL protegida, "
+                    "configura el token correspondiente o coloca el modelo manualmente."
                 )
             response.raise_for_status()
 

@@ -1,6 +1,6 @@
 # ButterVision - Stable Diffusion WebUI
 
-Una interfaz minimalista y personalizada para Stable Diffusion con LoRA de mejora automática.
+Una interfaz minimalista para generar imágenes con Stable Diffusion desde texto.
 
 ## 🚀 Instalación Rápida
 
@@ -20,13 +20,12 @@ Una interfaz minimalista y personalizada para Stable Diffusion con LoRA de mejor
 - **GPU con CUDA** (GTX 1650 o superior recomendado)
 - **8GB RAM mínimo**
 
-## 🎨 Características
+## 🎨 Características MVP
 
-- ✅ **Interfaz minimalista** con 4 pestañas
-- ✅ **LoRA de mejora automática** (descarga automática)
+- ✅ **Interfaz Text-to-Image**
+- ✅ **Descarga/verificación del modelo base al primer arranque**
 - ✅ **Optimizaciones para baja VRAM**
-- ✅ **Entrenamiento de LoRA** (interfaz preparada)
-- ✅ **Controles de calidad** ajustables
+- ✅ **Parámetros básicos**: prompt, negative prompt, steps, CFG, tamaño y seed
 
 ## 🛠️ Uso Manual
 
@@ -43,7 +42,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Ejecutar
-python main.py
+./run.sh
 ```
 
 ## 📁 Estructura del Proyecto
@@ -57,14 +56,28 @@ buttervision/
 ├── outputs/             # Imágenes generadas
 ├── requirements.txt     # Dependencias
 ├── setup.sh            # Script de instalación
+├── run.bat             # Lanzador Windows
 └── run.sh              # Script de ejecución
 ```
 
-## 🎯 Pestañas Disponibles
+## 🎯 Funcionalidad Disponible
 
-1. **Text to Image** - Generación básica
-2. **Image to Image** - Transformación de imágenes
-3. **Train LoRA** - Entrenamiento personalizado
-4. **Settings** - Configuración y gestión de modelos
+Por ahora ButterVision expone solo **Text to Image**. El resto de módulos se agregará después de estabilizar este flujo.
 
-¡Disfruta generando imágenes con tu ButterVision personalizado! 🎨
+## 🚀 Lanzador
+
+Linux/Mac:
+
+```bash
+./run.sh
+./run.sh --port 7861
+./run.sh --share
+```
+
+Windows:
+
+```bat
+run.bat
+run.bat --port 7861
+run.bat --share
+```

@@ -96,6 +96,7 @@ mkdir -p models/embeddings
 mkdir -p outputs
 mkdir -p cache
 mkdir -p extensions
+chmod +x run.sh
 
 # Verificar instalación
 echo ""
@@ -106,12 +107,11 @@ echo ""
 echo "✅ ¡Instalación completada!"
 echo ""
 echo "Para iniciar ButterVision:"
-echo "  1. Activa el entorno: source venv/bin/activate"
-echo "  2. Ejecuta: python main.py"
+echo "  ./run.sh"
 echo ""
 echo "Opciones útiles:"
-echo "  python main.py --lowvram    # Para GPUs con < 4GB VRAM"
-echo "  python main.py --medvram    # Para GPUs con 4-6GB VRAM"
-echo "  python main.py --share      # Crear link público"
+echo "  ./run.sh --port 7861"
+echo "  ./run.sh --share"
+echo "  ./run.sh --skip-model-download"
 echo ""
 echo "Para más información: cat README.md"

@@ -248,6 +248,7 @@ def main():
         "inbrowser": False,  # No abrir navegador automáticamente
         "show_error": config.ui_config.show_error,
         "theme": gr.themes.Soft(),
+        "footer_links": [],
     }
     
     # Añadir autenticación si está configurada

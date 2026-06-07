@@ -42,9 +42,18 @@ python -c "import diffusers; print(f'Diffusers: {diffusers.__version__}')" || { 
 
 # Actualizar script run.sh
 echo '#!/bin/bash
+set -e
+
 cd "$(dirname "$0")"
+
+if [ ! -d "venv" ]; then
+    echo "No existe el entorno virtual venv."
+    echo "Primero ejecuta: bash install.sh cuda121"
+    exit 1
+fi
+
 source venv/bin/activate
-python main.py' > run.sh
+python main.py "$@"' > run.sh
 chmod +x run.sh
 
 echo ""
@@ -53,6 +62,5 @@ echo ""
 echo "Para ejecutar ButterVision:"
 echo "  ./run.sh"
 echo ""
-echo "O manualmente:"
-echo "  source venv/bin/activate"
-echo "  python main.py"
+echo "Puedes pasar opciones al lanzador:"
+echo "  ./run.sh --port 7861"
