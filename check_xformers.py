@@ -39,7 +39,7 @@ def check_xformers():
 
         # Verificar VRAM usado
         vram_used = torch.cuda.memory_allocated() / 1024**3
-        print(".2f"
+        print(f"VRAM usada: {vram_used:.2f} GB")
 
         return True
 

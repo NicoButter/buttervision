@@ -4,24 +4,18 @@ Test simple para verificar configuración sin descargar modelos
 """
 
 def check_model_exists():
-    """Verificar si el modelo SD 1.5 existe localmente"""
-    from pathlib import Path
+    """Verificar si el modelo configurado existe localmente"""
+    import config
+    from core.model_manager import ModelManager
 
-    model_paths = [
-        "cache/models--runwayml--stable-diffusion-v1-5/snapshots",
-        "cache/models--runwayml--stable-diffusion-v1-5",
-    ]
+    model_manager = ModelManager()
+    model_path = model_manager.resolve_model_path(config.model_config.model_id)
+    if model_path:
+        print(f"✅ Modelo encontrado: {model_path}")
+        return True
 
-    for path in model_paths:
-        p = Path(path)
-        if p.exists():
-            safetensors = list(p.rglob("*.safetensors"))
-            if safetensors:
-                print(f"✅ Modelo encontrado: {len(safetensors)} archivos .safetensors")
-                return True
-
-    print("❌ Modelo no encontrado localmente")
-    print("   Ejecuta: python main.py (primera vez descarga ~4GB)")
+    print(f"❌ Modelo no encontrado localmente: {config.model_config.model_id}")
+    print("   Ejecuta: python main.py para descargarlo en el primer arranque")
     return False
 
 def check_pipeline_config():

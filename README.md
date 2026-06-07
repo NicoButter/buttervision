@@ -75,6 +75,21 @@ pip install xformers
 python main.py
 ```
 
+En el primer arranque, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors` desde CivitAI.
+
+Si CivitAI pide autenticación para el checkpoint, crea un API token en tu cuenta y ejecútalo así:
+
+```bash
+export CIVITAI_API_TOKEN="tu_token"
+python main.py
+```
+
+También puedes descargarlo manualmente y colocarlo en:
+
+```text
+models/stable-diffusion/cyberrealistic_final.safetensors
+```
+
 La interfaz se abrirá automáticamente en: `http://localhost:7860`
 
 ### Opciones de línea de comandos
@@ -113,6 +128,9 @@ python main.py --no-optimizations
 ```bash
 # Usar un modelo diferente
 python main.py --model "stabilityai/stable-diffusion-2-1"
+
+# Modo offline estricto: no descargar modelos al arrancar
+python main.py --skip-model-download
 
 # Desactivar float16 (usa más VRAM)
 python main.py --no-fp16

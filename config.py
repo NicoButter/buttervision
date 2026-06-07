@@ -26,11 +26,12 @@ for directory in [MODELS_DIR, SD_MODELS_DIR, LORA_DIR, CONTROLNET_DIR, EMBEDDING
 @dataclass
 class ModelConfig:
     """Configuración del modelo Stable Diffusion"""
-    # Modelo base por defecto (puedes usar cualquier modelo compatible de HuggingFace)
-    model_id: str = "runwayml/stable-diffusion-v1-5"
-    # Alternativas populares:
-    # "stabilityai/stable-diffusion-2-1"
-    # "stabilityai/stable-diffusion-xl-base-1.0"
+    # Modelo base por defecto. ButterVision lo descarga en el primer arranque si falta.
+    model_id: str = "cyberrealistic_final"
+    default_model_filename: str = "cyberrealistic_final.safetensors"
+    default_model_url: str = "https://civitai.com/api/download/models/2681234?fileId=2567874"
+    # También puedes usar un repo Hugging Face compatible, por ejemplo:
+    # "runwayml/stable-diffusion-v1-5"
     
     # Optimizaciones de memoria
     use_fp16: bool = False  # DESACTIVADO para GTX 1650 (evita type mismatches)

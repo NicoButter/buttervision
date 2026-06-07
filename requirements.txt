@@ -1,10 +1,9 @@
 # ButterVision - Stable Diffusion WebUI
 # Requisitos para Python 3.10+ con CUDA
 
-# PyTorch con CUDA 12.1 (para GTX 1650)
-torch==2.5.1+cu121
-torchvision==0.20.1+cu121
-torchaudio==2.5.1+cu121
+# Instala PyTorch antes de este archivo con el comando adecuado para tu CUDA:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# o usa install.sh/setup.sh.
 
 # Diffusers y transformers
 diffusers>=0.25.0
@@ -13,7 +12,7 @@ accelerate>=0.25.0
 huggingface_hub>=0.20.0
 
 # Optimizaciones de memoria
-xformers>=0.0.23
+# xformers es opcional y se instala por separado en install.sh cuando hay CUDA.
 safetensors>=0.4.1
 
 # Interfaz y API

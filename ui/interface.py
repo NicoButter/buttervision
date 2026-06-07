@@ -9,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from PIL import Image
 import config
-from core import StableDiffusionManager, lora_manager, ModelManager
+from core.lora_manager import lora_manager
+from core.model_manager import ModelManager
 from core.advanced_pipeline import ButterVisionPipeline
 
 
@@ -19,13 +20,13 @@ class ButterVisionUI:
     def __init__(self):
         # Usar pipeline avanzado con LoRA automático
         self.sd_manager = ButterVisionPipeline(
-            model_id="runwayml/stable-diffusion-v1-5",
+            model_id=config.model_config.model_id,
             enable_optimizations=True,
             enable_lcm=False
         )
         self.lora_manager = lora_manager
         self.model_manager = ModelManager()
-        self.available_models = ["runwayml/stable-diffusion-v1-5"]  # Modelo fijo por ahora
+        self.available_models = self._scan_models()
     
     def update_detail_enhancer(self, enabled, weight):
         """El LoRA de cara personal se carga automáticamente"""
@@ -250,7 +251,7 @@ class ButterVisionUI:
         # Estado para modelos disponibles
         models_state = gr.State(self.available_models)
 
-        with gr.Blocks(title="ButterVision - Minimal SD WebUI", theme=gr.themes.Soft()) as interface:
+        with gr.Blocks(title="ButterVision - Minimal SD WebUI") as interface:
 
             gr.Markdown("# 🎨 ButterVision")
             gr.Markdown("Stable Diffusion WebUI minimalista y limpio")

@@ -20,8 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 import torch
+import gradio as gr
 import config
-from ui import create_ui
 
 
 def parse_args():
@@ -62,6 +62,11 @@ def parse_args():
         type=str,
         default=None,
         help=f"ID del modelo de HuggingFace (default: {config.model_config.model_id})",
+    )
+    parser.add_argument(
+        "--skip-model-download",
+        action="store_true",
+        help="No descargar modelos al iniciar; falla luego si el modelo no está disponible",
     )
     parser.add_argument(
         "--no-fp16",
@@ -192,6 +197,23 @@ def print_system_info():
     print("\n" + "="*60 + "\n")
 
 
+def bootstrap_base_models(skip_download: bool = False):
+    """Descarga o resuelve los modelos base mínimos antes de abrir la UI."""
+    from core.model_manager import ModelManager
+
+    model_id = config.model_config.model_id
+    print("📦 Verificando modelos base iniciales...")
+
+    model_manager = ModelManager()
+    model_path = model_manager.ensure_model(
+        model_id=model_id,
+        allow_download=not skip_download,
+    )
+
+    config.model_config.model_id = model_path
+    print(f"✅ Modelo activo: {config.model_config.model_id}\n")
+
+
 def main():
     """Función principal"""
     
@@ -203,8 +225,18 @@ def main():
     
     # Mostrar info del sistema
     print_system_info()
+
+    # Garantizar modelo base inicial
+    try:
+        bootstrap_base_models(skip_download=args.skip_model_download)
+    except Exception as e:
+        print(f"❌ No se pudo preparar el modelo base: {e}")
+        print("   Revisa tu conexión o ejecuta con un modelo local válido usando --model /ruta/modelo")
+        sys.exit(1)
     
     # Crear interfaz
+    from ui import create_ui
+
     print("🚀 Iniciando interfaz web...\n")
     interface = create_ui()
     
@@ -215,6 +247,7 @@ def main():
         "share": config.server_config.share,
         "inbrowser": False,  # No abrir navegador automáticamente
         "show_error": config.ui_config.show_error,
+        "theme": gr.themes.Soft(),
     }
     
     # Añadir autenticación si está configurada

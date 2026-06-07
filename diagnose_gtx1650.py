@@ -51,8 +51,8 @@ def test_float32_full():
         mean_val = img_array.mean()
         std_val = img_array.std()
 
-        print(".2f")
-        print(".2f")
+        print(f"Media de pixeles: {mean_val:.2f}")
+        print(f"Desviación estándar: {std_val:.2f}")
 
         if mean_val > 50 and std_val > 20:
             print("🎉 ¡ÉXITO! Imagen válida con float32")
@@ -114,8 +114,8 @@ def test_vae_cpu():
         mean_val = img_array.mean()
         std_val = img_array.std()
 
-        print(".2f")
-        print(".2f")
+        print(f"Media de pixeles: {mean_val:.2f}")
+        print(f"Desviación estándar: {std_val:.2f}")
 
         if mean_val > 50 and std_val > 20:
             print("🎉 ¡ÉXITO! VAE en CPU funciona")
@@ -176,8 +176,8 @@ def test_xformers_disabled():
         mean_val = img_array.mean()
         std_val = img_array.std()
 
-        print(".2f")
-        print(".2f")
+        print(f"Media de pixeles: {mean_val:.2f}")
+        print(f"Desviación estándar: {std_val:.2f}")
 
         if mean_val > 50 and std_val > 20:
             print("🎉 ¡ÉXITO! Sin xFormers funciona")

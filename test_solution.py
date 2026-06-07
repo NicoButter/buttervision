@@ -55,8 +55,8 @@ def test_vae_cpu_solution():
         mean_val = img_array.mean()
         std_val = img_array.std()
 
-        print(".2f")
-        print(".2f")
+        print(f"Media de pixeles: {mean_val:.2f}")
+        print(f"Desviación estándar: {std_val:.2f}")
 
         if mean_val > 50 and std_val > 20:
             print("🎉 ¡ÉXITO! La solución funciona")

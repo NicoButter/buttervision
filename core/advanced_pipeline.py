@@ -56,6 +56,7 @@ from typing import Optional, List, Dict, Any, Union
 from PIL import Image
 from diffusers import (
     StableDiffusionPipeline,
+    StableDiffusionImg2ImgPipeline,
     AnimateDiffPipeline,
     DDIMScheduler,
     MotionAdapter,
@@ -63,6 +64,7 @@ from diffusers import (
 )
 from diffusers.utils import logging
 import config
+from core.model_manager import ModelManager
 
 # Configurar logging
 logger = logging.get_logger(__name__)
@@ -93,13 +95,14 @@ class ButterVisionPipeline:
             enable_lcm: Usar LCM LoRA para generación más rápida
         """
         self.model_id = model_id
-        self.checkpoint_path = checkpoint_path or "SG161222/Realistic_Vision_V5.1_noVAE"
+        self.checkpoint_path = checkpoint_path or self.model_id
         self.device = device if torch.cuda.is_available() else "cpu"
         self.enable_optimizations = enable_optimizations
         self.enable_lcm = enable_lcm
 
         # Pipelines (cargados bajo demanda)
         self.sd_pipeline: Optional[StableDiffusionPipeline] = None
+        self.img2img_pipeline: Optional[StableDiffusionImg2ImgPipeline] = None
         self.animatediff_pipeline: Optional[AnimateDiffPipeline] = None
 
         # Estado LoRA
@@ -116,6 +119,14 @@ class ButterVisionPipeline:
         print(f"⚡ Optimizaciones: {'Activadas' if enable_optimizations else 'Desactivadas'}")
         print(f"🚀 LCM: {'Activado' if enable_lcm else 'Desactivado'}")
         print(f"🎭 LoRAs encontrados: {len(self.available_loras)}")
+
+    def _resolve_model_source(self) -> str:
+        """Devuelve una ruta local si el modelo ya está descargado."""
+        model_path = ModelManager().resolve_model_path(self.model_id)
+        return model_path or self.model_id
+
+    def _is_single_file_model(self, model_source: str) -> bool:
+        return Path(model_source).suffix.lower() in {".safetensors", ".ckpt"}
 
     def _scan_available_loras(self) -> Dict[str, str]:
         """Escanea LoRAs disponibles en models/lora/ y ./loras/"""
@@ -193,12 +204,21 @@ class ButterVisionPipeline:
 
         # Cargar pipeline base
         torch_dtype = torch.float16 if (self.device == "cuda" and config.model_config.use_fp16) else torch.float32
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            self.model_id,
-            torch_dtype=torch_dtype,
-            safety_checker=None,  # Desactivar para más velocidad
-            cache_dir=str(config.model_config.cache_dir),
-        )
+        model_source = self._resolve_model_source()
+        if self._is_single_file_model(model_source):
+            pipeline = StableDiffusionPipeline.from_single_file(
+                model_source,
+                torch_dtype=torch_dtype,
+                safety_checker=None,
+                cache_dir=str(config.model_config.cache_dir),
+            )
+        else:
+            pipeline = StableDiffusionPipeline.from_pretrained(
+                model_source,
+                torch_dtype=torch_dtype,
+                safety_checker=None,  # Desactivar para más velocidad
+                cache_dir=str(config.model_config.cache_dir),
+            )
 
         # Aplicar checkpoint realista si es diferente del base
         if self.checkpoint_path != self.model_id:
@@ -220,9 +240,8 @@ class ButterVisionPipeline:
         pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
         print("✅ DDIM Scheduler forzado (estable para GTX 1650)")
 
-        # Aplicar optimizaciones VRAM
-        pipeline = self._apply_vram_optimizations(pipeline)
         pipeline = pipeline.to(self.device)
+        pipeline = self._apply_vram_optimizations(pipeline)
 
         # Cargar LCM LoRA si está habilitado
         if self.enable_lcm:
@@ -260,8 +279,9 @@ class ButterVisionPipeline:
         )
 
         # Crear pipeline con SD base + motion adapter
+        model_source = self._resolve_model_source()
         pipeline = AnimateDiffPipeline.from_pretrained(
-            self.model_id,
+            model_source,
             motion_adapter=motion_adapter,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
             safety_checker=None,
@@ -271,12 +291,63 @@ class ButterVisionPipeline:
         # Configurar scheduler para videos
         pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
 
-        # Aplicar optimizaciones VRAM (más agresivas para videos)
-        pipeline = self._apply_vram_optimizations(pipeline)
         pipeline = pipeline.to(self.device)
+        pipeline = self._apply_vram_optimizations(pipeline)
 
         self.animatediff_pipeline = pipeline
         print("✅ Pipeline AnimateDiff listo")
+        return pipeline
+
+    def load_img2img_pipeline(self) -> StableDiffusionImg2ImgPipeline:
+        """Carga el pipeline Image-to-Image reutilizando componentes de txt2img cuando sea posible."""
+        if self.img2img_pipeline is not None:
+            return self.img2img_pipeline
+
+        print("📥 Cargando pipeline img2img...")
+
+        if self.sd_pipeline is not None:
+            pipeline = StableDiffusionImg2ImgPipeline(
+                vae=self.sd_pipeline.vae,
+                text_encoder=self.sd_pipeline.text_encoder,
+                tokenizer=self.sd_pipeline.tokenizer,
+                unet=self.sd_pipeline.unet,
+                scheduler=self.sd_pipeline.scheduler,
+                safety_checker=None,
+                feature_extractor=None,
+                requires_safety_checker=False,
+            )
+        else:
+            torch_dtype = torch.float16 if (self.device == "cuda" and config.model_config.use_fp16) else torch.float32
+            model_source = self._resolve_model_source()
+            if self._is_single_file_model(model_source):
+                pipeline = StableDiffusionImg2ImgPipeline.from_single_file(
+                    model_source,
+                    torch_dtype=torch_dtype,
+                    safety_checker=None,
+                    cache_dir=str(config.model_config.cache_dir),
+                )
+            else:
+                pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
+                    model_source,
+                    torch_dtype=torch_dtype,
+                    safety_checker=None,
+                    requires_safety_checker=False,
+                    cache_dir=str(config.model_config.cache_dir),
+                )
+            pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+            pipeline = pipeline.to(self.device)
+            pipeline = self._apply_vram_optimizations(pipeline)
+
+        if self.sd_pipeline is not None:
+            pipeline = pipeline.to(self.device)
+            pipeline = self._apply_vram_optimizations(pipeline)
+
+        self.img2img_pipeline = pipeline
+        print("✅ Pipeline img2img listo")
+
+        for lora_name, weight in self.loaded_loras.items():
+            self.load_lora(lora_name, weight)
+
         return pipeline
 
     def load_lora(self, lora_name: str, weight: float = 1.0):
@@ -391,6 +462,43 @@ class ButterVisionPipeline:
         print(f"✅ Generadas {len(result.images)} imagen(es) PIL")
         return result.images
 
+    def generate_img2img(
+        self,
+        init_image: Image.Image,
+        prompt: str,
+        negative_prompt: str = "",
+        steps: int = 20,
+        cfg_scale: float = 5.0,
+        strength: float = 0.75,
+        seed: int = -1,
+        num_images: int = 1,
+    ) -> List[Image.Image]:
+        """Genera imágenes a partir de una imagen inicial."""
+        pipeline = self.load_img2img_pipeline()
+
+        generator = None
+        if seed != -1:
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+
+        print(f"🖼️ Transformando {num_images} imagen(es)...")
+
+        result = pipeline(
+            prompt=prompt,
+            image=init_image,
+            negative_prompt=negative_prompt or None,
+            num_inference_steps=steps,
+            guidance_scale=cfg_scale,
+            strength=strength,
+            num_images_per_prompt=num_images,
+            generator=generator,
+        )
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"✅ Transformadas {len(result.images)} imagen(es) PIL")
+        return result.images
+
     def generate_video(
         self,
         prompt: str,
@@ -452,15 +560,32 @@ class ButterVisionPipeline:
         try:
             allocated = torch.cuda.memory_allocated() / 1024**3
             reserved = torch.cuda.memory_reserved() / 1024**3
-            return ".2f"
-        except:
+            return f"Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB"
+        except Exception:
             return "Unable to read VRAM"
+
+    def change_model(self, new_model_id: str):
+        """Cambia el modelo base y descarga pipelines cargados."""
+        if new_model_id == self.model_id:
+            print("ℹ️ El modelo ya está cargado")
+            return
+
+        print(f"🔄 Cambiando modelo de '{self.model_id}' a '{new_model_id}'...")
+        self.cleanup()
+        self.model_id = new_model_id
+        self.checkpoint_path = new_model_id
+        self.available_loras = self._scan_available_loras()
+        print("✅ Modelo cambiado. Se cargará en la próxima generación.")
 
     def cleanup(self):
         """Limpia pipelines y libera memoria"""
         if self.sd_pipeline:
             del self.sd_pipeline
             self.sd_pipeline = None
+
+        if self.img2img_pipeline:
+            del self.img2img_pipeline
+            self.img2img_pipeline = None
 
         if self.animatediff_pipeline:
             del self.animatediff_pipeline
