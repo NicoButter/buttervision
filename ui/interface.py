@@ -26,9 +26,11 @@ body,
     color: #e5f7ff !important;
 }
 .gradio-container {
-    max-width: 1240px !important;
-    margin: 0 auto !important;
-    padding: 18px 18px 40px !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 18px 24px 40px !important;
+    box-sizing: border-box !important;
 }
 .gradio-container::before {
     content: "";
@@ -171,6 +173,79 @@ body,
 .bv-output img {
     border-radius: 8px !important;
 }
+.bv-image-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background:
+        radial-gradient(circle at 50% 42%, rgba(0, 229, 255, 0.18), transparent 35%),
+        rgba(2, 6, 14, 0.78);
+    backdrop-filter: blur(18px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 220ms ease;
+}
+.bv-image-modal.bv-modal-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+.bv-modal-shell {
+    width: min(92vw, 980px);
+    max-height: 92vh;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+    border-radius: 8px;
+    background: linear-gradient(180deg, rgba(10, 17, 34, 0.96), rgba(5, 8, 18, 0.98));
+    box-shadow:
+        0 0 60px rgba(0, 229, 255, 0.22),
+        0 0 90px rgba(255, 43, 214, 0.12),
+        0 28px 80px rgba(0, 0, 0, 0.62);
+    transform: translateY(18px) scale(0.96);
+    transition: transform 260ms cubic-bezier(.2,.8,.2,1);
+    overflow: hidden;
+}
+.bv-image-modal.bv-modal-open .bv-modal-shell {
+    transform: translateY(0) scale(1);
+}
+.bv-modal-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.18);
+}
+.bv-modal-title {
+    color: #f8fbff;
+    font-size: 13px;
+    font-weight: 800;
+}
+.bv-modal-close {
+    appearance: none;
+    border: 1px solid rgba(255, 43, 214, 0.42);
+    border-radius: 6px;
+    background: rgba(255, 43, 214, 0.10);
+    color: #ffd7f7;
+    width: 34px;
+    height: 30px;
+    cursor: pointer;
+}
+.bv-modal-close:hover {
+    background: rgba(255, 43, 214, 0.22);
+}
+.bv-modal-image-wrap {
+    padding: 14px;
+}
+#bv-modal-image {
+    display: block;
+    width: 100%;
+    max-height: 76vh;
+    object-fit: contain;
+    border-radius: 8px;
+    box-shadow: 0 0 32px rgba(0, 229, 255, 0.12);
+}
 @media (max-width: 780px) {
     .gradio-container {
         padding: 10px 10px 28px !important;
@@ -184,18 +259,87 @@ body,
     .topbar .model-status {
         justify-content: flex-start;
     }
+    .bv-image-modal {
+        padding: 12px;
+    }
 }
 """
 
 UI_JS = """
 () => {
+  const state = window.__buttervisionState || { lastModalSrc: null };
+  window.__buttervisionState = state;
+
   const updateTopbar = () => {
     const topbar = document.querySelector('.topbar');
     if (!topbar) return;
     topbar.classList.toggle('bv-shrink', window.scrollY > 36);
   };
+
+  const closeModal = () => {
+    const modal = document.getElementById('bv-image-modal');
+    if (modal) modal.classList.remove('bv-modal-open');
+  };
+
+  const openModalForImage = (src) => {
+    if (!src || src === state.lastModalSrc) return;
+    const modal = document.getElementById('bv-image-modal');
+    const modalImage = document.getElementById('bv-modal-image');
+    if (!modal || !modalImage) return;
+    state.lastModalSrc = src;
+    modalImage.src = src;
+    modal.classList.add('bv-modal-open');
+  };
+
+  const findGeneratedImage = () => {
+    const host = document.getElementById('bv-generated-image');
+    if (!host) return null;
+    return host.querySelector('img');
+  };
+
+  const watchGeneratedImage = () => {
+    const host = document.getElementById('bv-generated-image');
+    if (!host) return false;
+    if (host.dataset.bvWatching === '1') {
+      const image = findGeneratedImage();
+      if (image && image.src) openModalForImage(image.src);
+      return true;
+    }
+    host.dataset.bvWatching = '1';
+
+    const observer = new MutationObserver(() => {
+      const image = findGeneratedImage();
+      if (image && image.src) openModalForImage(image.src);
+    });
+    observer.observe(host, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src']
+    });
+
+    const image = findGeneratedImage();
+    if (image && image.src) openModalForImage(image.src);
+    return true;
+  };
+
+  document.addEventListener('click', (event) => {
+    if (event.target?.matches?.('[data-bv-modal-close]')) closeModal();
+    if (event.target?.id === 'bv-image-modal') closeModal();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModal();
+  });
+
   window.addEventListener('scroll', updateTopbar, { passive: true });
   updateTopbar();
+  const readyTimer = setInterval(() => {
+    updateTopbar();
+    watchGeneratedImage();
+  }, 500);
+  setTimeout(() => clearInterval(readyTimer), 15000);
+  watchGeneratedImage();
 }
 """
 
@@ -399,8 +543,29 @@ class ButterVisionUI:
             with gr.Column(elem_classes=["bv-output"]):
                 gr.HTML("<h2>Generated Image</h2>")
                 with gr.Row():
-                    image_output = gr.Image(type="pil", label="Generated Image", height=512)
+                    image_output = gr.Image(
+                        type="pil",
+                        label="Generated Image",
+                        height=512,
+                        elem_id="bv-generated-image",
+                    )
                     info_text = gr.Textbox(label="Info", interactive=False, lines=5)
+
+            gr.HTML(
+                """
+                <div id="bv-image-modal" class="bv-image-modal">
+                    <div class="bv-modal-shell">
+                        <div class="bv-modal-bar">
+                            <div class="bv-modal-title">Generated Image</div>
+                            <button class="bv-modal-close" data-bv-modal-close type="button">×</button>
+                        </div>
+                        <div class="bv-modal-image-wrap">
+                            <img id="bv-modal-image" alt="Generated image preview" />
+                        </div>
+                    </div>
+                </div>
+                """
+            )
 
             generate_btn.click(
                 fn=self.txt2img_generate,
