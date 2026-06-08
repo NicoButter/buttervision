@@ -23,7 +23,7 @@ WebUI ligero y personalizado para Stable Diffusion, similar a Automatic1111 pero
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/tuusuario/buttervision.git
+git clone https://github.com/nicobutter/buttervision.git
 cd buttervision
 ```
 
@@ -200,11 +200,12 @@ buttervision/
 2. (Opcional) Añade un negative prompt
 3. Ajusta los parámetros:
    - **Steps**: 20-50 para calidad (más = más lento)
-   - **CFG Scale**: 7-9 para seguir el prompt
+   - **CFG Scale**: 5 por defecto para estabilidad en GTX 1650
    - **Width/Height**: 512x512 por defecto
    - **Seed**: -1 para aleatorio
-4. (Opcional) Carga LoRAs desde el acordeón
-5. Haz clic en "Generate"
+   - **Batch**: 1-4 imágenes por generación
+4. Haz clic en "Generate"
+5. Cada generación se guarda en `outputs/DDMMYYYY-HHMMSS-generation/` con los PNG, `metadata.json` y `prompt.txt`. La seed aleatoria usada vuelve al campo Seed para poder repetir el resultado.
 
 ### Image-to-Image
 
@@ -347,6 +348,13 @@ python -c "from diffusers import StableDiffusionPipeline; StableDiffusionPipelin
 
 Este proyecto está bajo la licencia MIT. Ver [LICENSE](LICENSE) para más detalles.
 
+## 👤 Autor
+
+**Nicolas Butterfield**
+
+- Email: [nicobutter@gmail.com](mailto:nicobutter@gmail.com)
+- GitHub: [nicobutter](https://github.com/nicobutter)
+
 ## 🙏 Agradecimientos
 
 - [Stability AI](https://stability.ai/) por Stable Diffusion
@@ -356,7 +364,7 @@ Este proyecto está bajo la licencia MIT. Ver [LICENSE](LICENSE) para más detal
 
 ## 📞 Soporte
 
-¿Problemas o preguntas? Abre un issue en GitHub o contacta al desarrollador.
+¿Problemas o preguntas? Abre un issue en GitHub o contacta a Nicolas Butterfield en [nicobutter@gmail.com](mailto:nicobutter@gmail.com).
 
 ---
 

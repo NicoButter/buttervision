@@ -2,11 +2,13 @@
 Interfaz ButterVision – Landing UI.
 Navbar fija, secciones definidas y mini footer.
 """
+import json
 import random
 from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
+from PIL.PngImagePlugin import PngInfo
 
 import config
 from core.advanced_pipeline import ButterVisionPipeline
@@ -694,20 +696,91 @@ class ButterVisionUI:
 
         return self._model_status_html(model_id)
 
-    def _save_images(self, images, seed):
-        """Guarda imágenes generadas en outputs/txt2img."""
-        outputs_dir = config.OUTPUTS_DIR / "txt2img"
+    def _get_generation_dir(self, created_at):
+        """Crea un directorio único para una corrida txt2img."""
+        outputs_dir = config.OUTPUTS_DIR
         outputs_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        saved_paths = []
+        base_name = created_at.strftime("%d%m%Y-%H%M%S-generation")
+        generation_dir = outputs_dir / base_name
+        suffix = 2
+        while generation_dir.exists():
+            generation_dir = outputs_dir / f"{base_name}-{suffix}"
+            suffix += 1
 
+        generation_dir.mkdir(parents=True, exist_ok=False)
+        return generation_dir
+
+    def _png_metadata(self, metadata):
+        """Prepara metadatos embebidos dentro del PNG."""
+        png_info = PngInfo()
+        png_info.add_text("ButterVision", "txt2img")
+        png_info.add_text("Prompt", metadata["prompt"])
+        png_info.add_text("Negative Prompt", metadata["negative_prompt"])
+        png_info.add_text("Seed", str(metadata["seed"]))
+        png_info.add_text("Model", metadata["model"])
+        png_info.add_text("Generation Metadata", json.dumps(metadata, ensure_ascii=False))
+        return png_info
+
+    def _save_generation(self, images, metadata):
+        """Guarda PNGs, prompts y metadata de una generación."""
+        created_at = datetime.fromisoformat(metadata["created_at"])
+        generation_dir = self._get_generation_dir(created_at)
+
+        metadata = {
+            **metadata,
+            "generation_dir": str(generation_dir),
+            "images": [],
+        }
+
+        png_info = self._png_metadata(metadata)
         for index, image in enumerate(images, start=1):
-            filepath = outputs_dir / f"{timestamp}_{seed}_{index}.png"
-            image.save(filepath)
-            saved_paths.append(filepath)
+            filename = f"image_{index:02d}.png"
+            filepath = generation_dir / filename
+            image.save(filepath, pnginfo=png_info)
+            metadata["images"].append(str(filepath))
 
-        return saved_paths
+        metadata_path = generation_dir / "metadata.json"
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        prompt_path = generation_dir / "prompt.txt"
+        prompt_path.write_text(
+            "\n".join(
+                [
+                    f"Prompt: {metadata['prompt']}",
+                    f"Negative Prompt: {metadata['negative_prompt']}",
+                    f"Seed: {metadata['seed']}",
+                    f"Model: {metadata['model']}",
+                    f"Size: {metadata['width']}x{metadata['height']}",
+                    f"Steps: {metadata['steps']} | CFG: {metadata['cfg_scale']}",
+                    f"Batch: {metadata['batch_size']}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        return generation_dir, [Path(path) for path in metadata["images"]]
+
+    def _load_history_gallery(self, limit=12):
+        """Carga las últimas imágenes generadas desde outputs."""
+        outputs_dir = config.OUTPUTS_DIR
+        if not outputs_dir.exists():
+            return []
+
+        image_paths = []
+        for directory in outputs_dir.iterdir():
+            if directory.is_dir():
+                image_paths.extend(directory.glob("*.png"))
+
+        image_paths = sorted(image_paths, key=lambda path: path.stat().st_mtime, reverse=True)
+        return [str(path) for path in image_paths[:limit]]
+
+    def refresh_history(self):
+        """Refresca la galería de generaciones recientes."""
+        return self._load_history_gallery()
 
     def txt2img_generate(
         self,
@@ -718,6 +791,7 @@ class ButterVisionUI:
         width,
         height,
         seed,
+        batch_size,
     ):
         """Genera una imagen desde texto."""
         try:
@@ -725,35 +799,59 @@ class ButterVisionUI:
             negative_prompt = (negative_prompt or "").strip()
 
             if not prompt:
-                return None, "Ingresa un prompt para generar una imagen."
+                return None, "Ingresa un prompt para generar una imagen.", seed, self._load_history_gallery()
 
-            if seed == -1:
+            if seed in (None, ""):
+                seed = -1
+
+            if int(seed) == -1:
                 seed = random.randint(0, 2**32 - 1)
             else:
                 seed = int(seed)
 
+            steps = int(steps)
+            cfg_scale = float(cfg_scale)
+            width = int(width)
+            height = int(height)
+            batch_size = max(1, min(int(batch_size), 4))
+
             images = self.sd_manager.generate_image(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
-                num_inference_steps=int(steps),
-                guidance_scale=float(cfg_scale),
-                width=int(width),
-                height=int(height),
+                num_inference_steps=steps,
+                guidance_scale=cfg_scale,
+                width=width,
+                height=height,
                 seed=seed,
-                num_images=1,
+                num_images=batch_size,
             )
 
-            saved_paths = self._save_images(images, seed)
+            created_at = datetime.now().isoformat(timespec="seconds")
+            metadata = {
+                "module": "txt2img",
+                "created_at": created_at,
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "seed": seed,
+                "steps": steps,
+                "cfg_scale": cfg_scale,
+                "width": width,
+                "height": height,
+                "batch_size": batch_size,
+                "model": self.sd_manager.model_id,
+            }
+            generation_dir, _ = self._save_generation(images, metadata)
             info = (
                 f"Seed: {seed}\n"
-                f"Size: {int(width)}x{int(height)}\n"
-                f"Steps: {int(steps)} | CFG: {float(cfg_scale):.1f}\n"
-                f"Saved: {saved_paths[0]}"
+                f"Size: {width}x{height}\n"
+                f"Steps: {steps} | CFG: {cfg_scale:.1f}\n"
+                f"Batch: {batch_size}\n"
+                f"Saved: {generation_dir}"
             )
-            return images[0], info
+            return images[0], info, seed, self._load_history_gallery()
 
         except Exception as error:
-            return None, f"Error: {error}"
+            return None, f"Error: {error}", seed, self._load_history_gallery()
 
     def create_interface(self):
         """Crea la interfaz landing-page de ButterVision."""
@@ -846,6 +944,11 @@ class ButterVisionUI:
                         value=config.model_config.default_height,
                         step=64, label="Height",
                     )
+                    batch_size = gr.Slider(
+                        minimum=1, maximum=4,
+                        value=1,
+                        step=1, label="Batch",
+                    )
                     seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
 
             # ── SECTION: OUTPUT ──────────────────────────────────────────
@@ -871,6 +974,18 @@ class ButterVisionUI:
                         interactive=False,
                         lines=7,
                     )
+
+            with gr.Row(equal_height=False):
+                with gr.Column(elem_classes=["bv-output-card"]):
+                    history_gallery = gr.Gallery(
+                        value=self._load_history_gallery(),
+                        label="Recent Generations",
+                        columns=4,
+                        rows=2,
+                        height=360,
+                        object_fit="contain",
+                    )
+                    refresh_history_btn = gr.Button("↻ Refresh History", size="sm")
 
             # ── FOOTER ────────────────────────────────────────────────
             gr.HTML(
@@ -913,8 +1028,8 @@ class ButterVisionUI:
             # ── EVENT HANDLERS ───────────────────────────────────────────
             generate_btn.click(
                 fn=self.txt2img_generate,
-                inputs=[prompt, negative_prompt, steps, cfg_scale, width, height, seed],
-                outputs=[image_output, info_text],
+                inputs=[prompt, negative_prompt, steps, cfg_scale, width, height, seed, batch_size],
+                outputs=[image_output, info_text, seed, history_gallery],
             )
             
             # Abrir modal cuando la imagen cambia
@@ -933,6 +1048,11 @@ class ButterVisionUI:
                 fn=self.refresh_models,
                 inputs=[],
                 outputs=[model_selector, model_status],
+            )
+            refresh_history_btn.click(
+                fn=self.refresh_history,
+                inputs=[],
+                outputs=[history_gallery],
             )
 
         return interface
