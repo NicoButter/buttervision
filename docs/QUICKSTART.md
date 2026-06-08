@@ -128,7 +128,7 @@ default_height: int = 512
 
 ## Links útiles
 
-- **README completo**: [README.md](README.md)
+- **README completo**: [README.md](../README.md)
 - **Ejemplos**: [EXAMPLES.md](EXAMPLES.md)
 - **Arquitectura**: [ARCHITECTURE.md](ARCHITECTURE.md)
 - **Prompts**: https://lexica.art/
@@ -180,4 +180,4 @@ watch -n 1 nvidia-smi
 
 ---
 
-**¿Problemas?** Revisa [README.md](README.md) sección "Solución de problemas"
+**¿Problemas?** Revisa [README.md](../README.md) sección "Solución de problemas"

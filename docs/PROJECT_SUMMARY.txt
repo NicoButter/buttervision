@@ -32,11 +32,11 @@ buttervision/
 │   └── extensions/         🔌 Plugins personalizados (futuro)
 │
 ├── 📖 DOCUMENTACIÓN
-│   ├── README.md           📘 Guía completa de instalación y uso
-│   ├── QUICKSTART.md       ⚡ Inicio rápido (3 minutos)
-│   ├── EXAMPLES.md         💡 Ejemplos y casos de uso
-│   ├── ARCHITECTURE.md     🏗️  Diseño técnico y arquitectura
-│   ├── CHANGELOG.md        📝 Historial de versiones
+│   ├── README.md           📘 Guía principal para GitHub
+│   ├── docs/QUICKSTART.md  ⚡ Inicio rápido (3 minutos)
+│   ├── docs/EXAMPLES.md    💡 Ejemplos y casos de uso
+│   ├── docs/ARCHITECTURE.md 🏗️  Diseño técnico y arquitectura
+│   ├── docs/CHANGELOG.md   📝 Historial de versiones
 │   └── LICENSE             ⚖️  Licencia MIT
 │
 ├── 🔧 INSTALACIÓN
@@ -179,9 +179,9 @@ Recomendados:
 
 Documentación:
   • README.md          - Guía completa
-  • QUICKSTART.md      - Inicio en 3 minutos
-  • EXAMPLES.md        - Casos de uso detallados
-  • ARCHITECTURE.md    - Diseño técnico
+  • docs/QUICKSTART.md - Inicio en 3 minutos
+  • docs/EXAMPLES.md   - Casos de uso detallados
+  • docs/ARCHITECTURE.md - Diseño técnico
 
 Recursos externos:
   • Prompts:  https://lexica.art/
@@ -194,9 +194,9 @@ Recursos externos:
 ================================================================================
 
 1. ✅ Instalación completada
-2. 📖 Lee QUICKSTART.md para empezar
+2. 📖 Lee docs/QUICKSTART.md para empezar
 3. 🎨 Genera tu primera imagen
-4. 📚 Explora EXAMPLES.md para casos avanzados
+4. 📚 Explora docs/EXAMPLES.md para casos avanzados
 5. 🎭 Descarga LoRAs de CivitAI
 6. 🔧 Experimenta con diferentes schedulers
 7. 💡 Lee sobre mejores prácticas de prompting
@@ -219,7 +219,7 @@ Recursos externos:
 ================================================================================
 
   ¿Problemas o preguntas?
-  • Revisa EXAMPLES.md y ARCHITECTURE.md
+  • Revisa docs/EXAMPLES.md y docs/ARCHITECTURE.md
   • Abre un issue en GitHub
   • Consulta la sección de troubleshooting en README.md
 

@@ -171,12 +171,15 @@ buttervision/
 ├── main.py                 # Punto de entrada principal
 ├── config.py              # Configuración centralizada
 ├── requirements.txt       # Dependencias Python
+├── requirements-instantid.txt # Dependencias opcionales de Face Reference
 ├── README.md             # Este archivo
 ├── LICENSE               # Licencia del proyecto
+├── docs/                 # Documentación secundaria del proyecto
 │
 ├── core/                 # Núcleo del sistema
 │   ├── __init__.py
 │   ├── pipeline.py       # StableDiffusionManager
+│   ├── instantid_pipeline.py # Backend Face Reference / InstantID
 │   └── lora_manager.py   # Gestor de LoRAs
 │
 ├── ui/                   # Interfaz de usuario
@@ -192,6 +195,8 @@ buttervision/
 ├── outputs/             # Imágenes generadas
 └── cache/               # Cache de modelos de HuggingFace
 ```
+
+Regla de documentación: `README.md` queda en la raíz para GitHub. Todo documento adicional (`.md` o `.txt`) debe vivir en `docs/`. Archivos funcionales como `requirements*.txt` permanecen en la raíz.
 
 ## 🎨 Uso de la interfaz
 
@@ -293,7 +298,7 @@ El LoRA se carga automáticamente. Usa prompts como:
 - `foto de [tu nombre], cara realista, sonrisa, fondo neutro`
 - `[tu nombre] en un parque, iluminación natural`
 
-Ver [LORA_TRAINING_README.md](LORA_TRAINING_README.md) para guía completa.
+Ver [LORA_TRAINING_README.md](docs/LORA_TRAINING_README.md) para guía completa.
 
 ## 🔧 Configuración avanzada
 

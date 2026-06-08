@@ -108,7 +108,7 @@ class StableDiffusionManager:
             else:
                 print("   ✅ LoRA ya disponible")
         else:
-            print("   ℹ️  LoRA deshabilitado (consulta models/lora/defaults/README.md para uso opcional)")
+            print("   ℹ️  LoRA deshabilitado (consulta docs/lora_defaults.md para uso opcional)")
         
         print("✅ Precarga completada")
     
