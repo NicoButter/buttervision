@@ -696,6 +696,35 @@ class ButterVisionUI:
 
         return self._model_status_html(model_id)
 
+    def switch_function(self, function_name):
+        """Muestra el panel correspondiente a la función elegida."""
+        is_face_reference = function_name == "Face Reference"
+        message = ""
+
+        if is_face_reference:
+            try:
+                self.sd_manager.cleanup()
+                manager = self._get_instantid_manager()
+                message = manager.ensure_assets(allow_download=True)
+            except Exception as error:
+                message = f"Error preparando InstantID: {error}"
+        elif hasattr(self, "instantid_manager") and self.instantid_manager is not None:
+            self.instantid_manager.cleanup()
+
+        return gr.update(visible=is_face_reference), message
+
+    def _get_instantid_manager(self):
+        """Carga InstantID solo cuando se usa Face Reference."""
+        if not hasattr(self, "instantid_manager"):
+            self.instantid_manager = None
+
+        if self.instantid_manager is None:
+            from core.instantid_pipeline import InstantIDPipeline
+
+            self.instantid_manager = InstantIDPipeline()
+
+        return self.instantid_manager
+
     def _get_generation_dir(self, created_at):
         """Crea un directorio único para una corrida txt2img."""
         outputs_dir = config.OUTPUTS_DIR
@@ -722,7 +751,7 @@ class ButterVisionUI:
         png_info.add_text("Generation Metadata", json.dumps(metadata, ensure_ascii=False))
         return png_info
 
-    def _save_generation(self, images, metadata):
+    def _save_generation(self, images, metadata, reference_images=None):
         """Guarda PNGs, prompts y metadata de una generación."""
         created_at = datetime.fromisoformat(metadata["created_at"])
         generation_dir = self._get_generation_dir(created_at)
@@ -731,7 +760,13 @@ class ButterVisionUI:
             **metadata,
             "generation_dir": str(generation_dir),
             "images": [],
+            "reference_images": [],
         }
+
+        for name, reference_image in (reference_images or {}).items():
+            reference_path = generation_dir / name
+            reference_image.save(reference_path)
+            metadata["reference_images"].append(str(reference_path))
 
         png_info = self._png_metadata(metadata)
         for index, image in enumerate(images, start=1):
@@ -853,6 +888,97 @@ class ButterVisionUI:
         except Exception as error:
             return None, f"Error: {error}", seed, self._load_history_gallery()
 
+    def face_reference_generate(
+        self,
+        face_image,
+        prompt,
+        negative_prompt,
+        steps,
+        cfg_scale,
+        width,
+        height,
+        seed,
+        batch_size,
+        identity_strength,
+        structure_strength,
+    ):
+        """Genera una imagen preservando identidad facial con InstantID."""
+        try:
+            if face_image is None:
+                return None, "Sube una imagen de referencia con una cara clara.", seed, self._load_history_gallery()
+
+            prompt = (prompt or "").strip()
+            negative_prompt = (negative_prompt or "").strip()
+            if not prompt:
+                return None, "Ingresa un prompt para generar una imagen.", seed, self._load_history_gallery()
+
+            if seed in (None, ""):
+                seed = -1
+
+            if int(seed) == -1:
+                seed = random.randint(0, 2**32 - 1)
+            else:
+                seed = int(seed)
+
+            steps = int(steps)
+            cfg_scale = float(cfg_scale)
+            width = max(512, min(int(width), 768))
+            height = max(512, min(int(height), 768))
+            batch_size = 1
+            identity_strength = float(identity_strength)
+            structure_strength = float(structure_strength)
+
+            self.sd_manager.cleanup()
+            manager = self._get_instantid_manager()
+            images = manager.generate(
+                face_image=face_image,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                steps=steps,
+                guidance_scale=cfg_scale,
+                seed=seed,
+                num_images=batch_size,
+                identity_strength=identity_strength,
+                structure_strength=structure_strength,
+            )
+
+            created_at = datetime.now().isoformat(timespec="seconds")
+            metadata = {
+                "module": "face_reference",
+                "backend": "InstantID",
+                "created_at": created_at,
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "seed": seed,
+                "steps": steps,
+                "cfg_scale": cfg_scale,
+                "width": width,
+                "height": height,
+                "batch_size": batch_size,
+                "identity_strength": identity_strength,
+                "structure_strength": structure_strength,
+                "model": manager.base_model,
+            }
+            generation_dir, _ = self._save_generation(
+                images,
+                metadata,
+                reference_images={"reference_face.png": face_image},
+            )
+            info = (
+                f"Mode: Face Reference / InstantID\n"
+                f"Seed: {seed}\n"
+                f"Size: {width}x{height}\n"
+                f"Steps: {steps} | CFG: {cfg_scale:.1f}\n"
+                f"Identity: {identity_strength:.2f} | Structure: {structure_strength:.2f}\n"
+                f"Saved: {generation_dir}"
+            )
+            return images[0], info, seed, self._load_history_gallery()
+
+        except Exception as error:
+            return None, f"Error: {error}", seed, self._load_history_gallery()
+
     def create_interface(self):
         """Crea la interfaz landing-page de ButterVision."""
         with gr.Blocks(title="ButterVision") as interface:
@@ -873,6 +999,12 @@ class ButterVisionUI:
                         "<a class='bv-nav-link' href='#bv-gen'>Generate</a>"
                         "<a class='bv-nav-link' href='#bv-out'>Output</a>"
                         "</nav>"
+                    )
+                with gr.Column(scale=1, min_width=180):
+                    function_selector = gr.Dropdown(
+                        choices=["Text to Image", "Face Reference"],
+                        value="Text to Image",
+                        label="",
                     )
                 with gr.Column(scale=3, min_width=340):
                     with gr.Row():
@@ -987,6 +1119,118 @@ class ButterVisionUI:
                     )
                     refresh_history_btn = gr.Button("↻ Refresh History", size="sm")
 
+            with gr.Group(visible=False) as face_reference_panel:
+                gr.HTML(
+                    "<div class='bv-section-sep' id='bv-face-ref'>"
+                    "<div class='bv-section-eyebrow'>Identity Preserving</div>"
+                    "<div class='bv-section-heading'>Face Reference</div>"
+                    "<div class='bv-section-rule'></div>"
+                    "</div>"
+                )
+
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=2, elem_classes=["bv-card"]):
+                        gr.HTML(
+                            "<div class='bv-card-header'>"
+                            "<span class='bv-card-icon'>✦</span> Reference"
+                            "</div>"
+                        )
+                        face_reference_image = gr.Image(
+                            type="pil",
+                            label="Reference Face",
+                            height=360,
+                        )
+                        face_identity_strength = gr.Slider(
+                            minimum=0.0,
+                            maximum=1.5,
+                            value=0.8,
+                            step=0.05,
+                            label="Identity Strength",
+                        )
+                        face_structure_strength = gr.Slider(
+                            minimum=0.0,
+                            maximum=1.5,
+                            value=0.8,
+                            step=0.05,
+                            label="Structure Strength",
+                        )
+
+                    with gr.Column(scale=3, elem_classes=["bv-card"]):
+                        gr.HTML(
+                            "<div class='bv-card-header'>"
+                            "<span class='bv-card-icon'>✦</span> Prompt"
+                            "</div>"
+                        )
+                        face_prompt = gr.Textbox(
+                            label="Prompt",
+                            placeholder="Describe the image while InstantID preserves the reference identity…",
+                            lines=4,
+                        )
+                        face_negative_prompt = gr.Textbox(
+                            label="Negative Prompt",
+                            placeholder="Elements to avoid…",
+                            lines=3,
+                        )
+                        with gr.Row(elem_classes=["bv-generate-btn"]):
+                            face_generate_btn = gr.Button("✦  Generate Face Reference", variant="primary", size="lg")
+
+                    with gr.Column(scale=2, elem_classes=["bv-card", "bv-card-params"]):
+                        gr.HTML(
+                            "<div class='bv-card-header'>"
+                            "<span class='bv-card-icon'>⚙</span> Parameters"
+                            "</div>"
+                        )
+                        face_steps = gr.Slider(
+                            minimum=1,
+                            maximum=60,
+                            value=15,
+                            step=1,
+                            label="Steps",
+                        )
+                        face_cfg_scale = gr.Slider(
+                            minimum=0.0,
+                            maximum=15.0,
+                            value=5.0,
+                            step=0.5,
+                            label="CFG Scale",
+                        )
+                        face_width = gr.Slider(
+                            minimum=512,
+                            maximum=768,
+                            value=512,
+                            step=64,
+                            label="Width",
+                        )
+                        face_height = gr.Slider(
+                            minimum=512,
+                            maximum=768,
+                            value=512,
+                            step=64,
+                            label="Height",
+                        )
+                        face_batch_size = gr.Slider(
+                            minimum=1,
+                            maximum=1,
+                            value=1,
+                            step=1,
+                            label="Batch",
+                        )
+                        face_seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
+
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=3, elem_classes=["bv-output-card"]):
+                        face_image_output = gr.Image(
+                            type="pil",
+                            label="Generated Face Reference Image",
+                            height=512,
+                        )
+                    with gr.Column(scale=2, elem_classes=["bv-info-card"]):
+                        face_info_text = gr.Textbox(
+                            label="Generation Info",
+                            interactive=False,
+                            lines=8,
+                        )
+
             # ── FOOTER ────────────────────────────────────────────────
             gr.HTML(
                 "<footer class='bv-footer'>"
@@ -1026,10 +1270,33 @@ class ButterVisionUI:
             gr.HTML(f"<script>{UI_JS}</script>", visible=False)
 
             # ── EVENT HANDLERS ───────────────────────────────────────────
+            function_selector.change(
+                fn=self.switch_function,
+                inputs=[function_selector],
+                outputs=[face_reference_panel, face_info_text],
+            )
+
             generate_btn.click(
                 fn=self.txt2img_generate,
                 inputs=[prompt, negative_prompt, steps, cfg_scale, width, height, seed, batch_size],
                 outputs=[image_output, info_text, seed, history_gallery],
+            )
+            face_generate_btn.click(
+                fn=self.face_reference_generate,
+                inputs=[
+                    face_reference_image,
+                    face_prompt,
+                    face_negative_prompt,
+                    face_steps,
+                    face_cfg_scale,
+                    face_width,
+                    face_height,
+                    face_seed,
+                    face_batch_size,
+                    face_identity_strength,
+                    face_structure_strength,
+                ],
+                outputs=[face_image_output, face_info_text, face_seed, history_gallery],
             )
             
             # Abrir modal cuando la imagen cambia

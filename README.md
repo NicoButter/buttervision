@@ -6,9 +6,10 @@ WebUI ligero y personalizado para Stable Diffusion, similar a Automatic1111 pero
 
 - **Interfaz web moderna** con Gradio
 - **Text-to-Image**: Genera imágenes desde prompts de texto
+- **Face Reference**: Genera imágenes preservando identidad facial con InstantID
 - **Image-to-Image**: Transforma imágenes existentes
 - **Soporte para LoRAs**: Carga dinámicamente múltiples LoRAs
-- **Optimizado para baja VRAM**: Funciona con GPUs de 4GB+
+- **Optimizado para baja VRAM**: defaults conservadores para GTX 1650 / 4GB VRAM
 - **Múltiples schedulers**: DPM++, Euler, DDIM, etc.
 - **Sistema extensible**: Arquitectura modular para añadir plugins
 
@@ -121,10 +122,10 @@ run.bat
 #### Optimizaciones de VRAM
 
 ```bash
-# GPU con poca VRAM (< 4GB) - Activa todas las optimizaciones + CPU offload
+# GPU de 4GB (GTX 1650) - slicing + CPU offload, sin xformers/fp16 por defecto
 ./run.sh --lowvram
 
-# GPU con VRAM media (4-6GB) - Optimizaciones sin CPU offload
+# GPU con VRAM media (6GB+) - fp16/xformers si tu GPU los tolera bien
 ./run.sh --medvram
 
 # Desactivar todas las optimizaciones (para debugging)
@@ -206,6 +207,44 @@ buttervision/
    - **Batch**: 1-4 imágenes por generación
 4. Haz clic en "Generate"
 5. Cada generación se guarda en `outputs/DDMMYYYY-HHMMSS-generation/` con los PNG, `metadata.json` y `prompt.txt`. La seed aleatoria usada vuelve al campo Seed para poder repetir el resultado.
+
+### Face Reference
+
+Face Reference usa **InstantID** para preservar identidad facial desde una sola imagen de referencia. Esta técnica combina embeddings faciales de InsightFace con guía estructural tipo ControlNet sobre SDXL, por lo que es más fiel para identidad que un `img2img` simple.
+
+1. Selecciona `Face Reference` en el dropdown del navbar
+2. Sube una imagen clara de una cara
+3. Escribe el prompt y el negative prompt
+4. Ajusta `Identity Strength` para más parecido facial y `Structure Strength` para más guía de landmarks
+5. Haz clic en "Generate Face Reference"
+
+Cada generación se guarda en `outputs/DDMMYYYY-HHMMSS-generation/` con los PNG, `reference_face.png`, `metadata.json` y `prompt.txt`.
+
+El baseline de ButterVision es GTX 1650 / 4GB VRAM: Face Reference arranca en `512x512`, `15 steps` y `Batch = 1`. `768x768` queda disponible como techo conservador; resoluciones mayores con InstantID/SDXL pueden hacer que el sistema mate el proceso por falta de memoria.
+
+Face Reference mantiene sus dependencias separadas del instalador base porque `insightface` y `onnxruntime-gpu` son paquetes pesados y específicos de esta función. Para habilitarlo:
+
+```bash
+./install_face_reference.sh
+```
+
+También puedes instalar todo junto desde cero:
+
+```bash
+bash install.sh cuda121 --instantid
+```
+
+Los modelos/pesos se descargan automáticamente la primera vez que seleccionas `Face Reference`:
+
+```text
+models/instantid/
+├── ControlNetModel/
+└── ip-adapter.bin
+
+models/antelopev2/
+```
+
+Nota: los modelos de InsightFace/FaceID suelen estar restringidos a investigación o uso no comercial según sus licencias upstream.
 
 ### Image-to-Image
 

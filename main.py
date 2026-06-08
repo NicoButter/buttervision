@@ -140,9 +140,9 @@ def apply_launch_config(args):
     
     # Modos de VRAM
     if args.lowvram:
-        print("🔧 Modo LOW VRAM activado (< 4GB)")
-        config.model_config.use_fp16 = True
-        config.model_config.enable_xformers = True
+        print("🔧 Modo LOW VRAM activado (GTX 1650 / 4GB)")
+        config.model_config.use_fp16 = False
+        config.model_config.enable_xformers = False
         config.model_config.enable_attention_slicing = True
         config.model_config.enable_vae_slicing = True
         config.model_config.enable_cpu_offload = True

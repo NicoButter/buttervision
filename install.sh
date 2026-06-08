@@ -1,10 +1,11 @@
 #!/bin/bash
 # Script de instalación rápida para ButterVision
-# Uso: bash install.sh [cuda118|cuda121|cpu]
+# Uso: bash install.sh [cuda118|cuda121|cpu] [--instantid]
 
 set -e
 
 CUDA_VERSION=${1:-cuda118}
+INSTALL_INSTANTID=${2:-}
 
 echo "🎨 ButterVision - Script de instalación"
 echo "========================================"
@@ -21,6 +22,11 @@ fi
 
 echo "Sistema operativo: $OS"
 echo "Versión CUDA: $CUDA_VERSION"
+if [[ "$INSTALL_INSTANTID" == "--instantid" ]]; then
+    echo "Face Reference / InstantID: incluido"
+else
+    echo "Face Reference / InstantID: opcional"
+fi
 echo ""
 
 # Verificar Python
@@ -80,6 +86,12 @@ echo ""
 echo "📚 Instalando dependencias..."
 pip install -r requirements.txt
 
+if [[ "$INSTALL_INSTANTID" == "--instantid" ]]; then
+    echo ""
+    echo "🧑 Instalando dependencias opcionales de Face Reference / InstantID..."
+    pip install -r requirements-instantid.txt
+fi
+
 # Instalar xformers (opcional pero recomendado)
 if [[ "$CUDA_VERSION" != "cpu" ]]; then
     echo ""
@@ -97,6 +109,7 @@ mkdir -p outputs
 mkdir -p cache
 mkdir -p extensions
 chmod +x run.sh
+chmod +x install_face_reference.sh
 
 # Verificar instalación
 echo ""
@@ -113,5 +126,6 @@ echo "Opciones útiles:"
 echo "  ./run.sh --port 7861"
 echo "  ./run.sh --share"
 echo "  ./run.sh --skip-model-download"
+echo "  ./install_face_reference.sh  # habilitar Face Reference / InstantID"
 echo ""
 echo "Para más información: cat README.md"

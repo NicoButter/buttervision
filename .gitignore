@@ -25,6 +25,8 @@ ENV/
 cache/
 models/Stable-diffusion/
 models/VAE/
+models/instantid/
+models/antelopev2/
 
 # LoRAs y modelos (mantener estructura pero ignorar archivos grandes)
 *.safetensors
@@ -32,6 +34,7 @@ models/VAE/
 *.pt
 *.pth
 *.bin
+*.onnx
 
 # Logs y temporal
 *.log
