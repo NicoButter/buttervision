@@ -576,80 +576,48 @@ html {
 """
 
 UI_JS = """
-function() {
-  const state = window.__buttervisionState || { lastModalSrc: null };
-  window.__buttervisionState = state;
-
+(function() {
+  console.log("ButterVision JS Initializing...");
+  
   const updateNavbar = () => {
     const navbar = document.querySelector('.bv-navbar');
     if (!navbar) return;
     navbar.classList.toggle('bv-scrolled', window.scrollY > 40);
   };
 
-  const closeModal = () => {
+  window.closeBVModal = function() {
     const modal = document.getElementById('bv-image-modal');
     if (modal) modal.classList.remove('bv-modal-open');
   };
 
-  const openModalForImage = (src) => {
-    if (!src || src === state.lastModalSrc) return;
+  window.openBVModal = function(src) {
+    console.log("Opening modal for:", src);
+    if (!src) return;
     const modal = document.getElementById('bv-image-modal');
     const modalImage = document.getElementById('bv-modal-image');
-    if (!modal || !modalImage) return;
-    state.lastModalSrc = src;
+    if (!modal || !modalImage) {
+        console.error("Modal elements not found");
+        return;
+    }
     modalImage.src = src;
     modal.classList.add('bv-modal-open');
   };
 
-  const findGeneratedImage = () => {
-    const host = document.getElementById('bv-generated-image');
-    if (!host) return null;
-    return host.querySelector('img');
-  };
-
-  const watchGeneratedImage = () => {
-    const host = document.getElementById('bv-generated-image');
-    if (!host) return false;
-    if (host.dataset.bvWatching === '1') {
-      const image = findGeneratedImage();
-      if (image && image.src) openModalForImage(image.src);
-      return true;
-    }
-    host.dataset.bvWatching = '1';
-
-    const observer = new MutationObserver(() => {
-      const image = findGeneratedImage();
-      if (image && image.src) openModalForImage(image.src);
-    });
-    observer.observe(host, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['src'],
-    });
-
-    const image = findGeneratedImage();
-    if (image && image.src) openModalForImage(image.src);
-    return true;
-  };
-
+  // Click handler for closing
   document.addEventListener('click', (event) => {
-    if (event.target?.matches?.('[data-bv-modal-close]')) closeModal();
-    if (event.target?.id === 'bv-image-modal') closeModal();
+    if (event.target?.matches?.('[data-bv-modal-close]')) window.closeBVModal();
+    if (event.target?.id === 'bv-image-modal') window.closeBVModal();
   });
+
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeModal();
+    if (event.key === 'Escape') window.closeBVModal();
   });
 
   window.addEventListener('scroll', updateNavbar, { passive: true });
-  updateNavbar();
-  const readyTimer = setInterval(() => {
-    updateNavbar();
-    watchGeneratedImage();
-  }, 500);
-  setTimeout(() => clearInterval(readyTimer), 15000);
-  watchGeneratedImage();
-}
+  
+  // Initial check
+  setTimeout(updateNavbar, 100);
+})();
 """
 
 
@@ -789,7 +757,7 @@ class ButterVisionUI:
 
     def create_interface(self):
         """Crea la interfaz landing-page de ButterVision."""
-        with gr.Blocks(title="ButterVision", css=get_ui_css(), js=get_ui_js()) as interface:
+        with gr.Blocks(title="ButterVision") as interface:
 
             active_model = self.sd_manager.model_id
 
@@ -939,12 +907,23 @@ class ButterVisionUI:
                 "</div>"
             )
 
+            # Inyectar JS mediante HTML para asegurar ejecución
+            gr.HTML(f"<script>{UI_JS}</script>", visible=False)
+
             # ── EVENT HANDLERS ───────────────────────────────────────────
             generate_btn.click(
                 fn=self.txt2img_generate,
                 inputs=[prompt, negative_prompt, steps, cfg_scale, width, height, seed],
                 outputs=[image_output, info_text],
             )
+            
+            # Abrir modal cuando la imagen cambia
+            image_output.change(
+                fn=None,
+                inputs=[image_output],
+                js="(url) => { if (url && window.openBVModal) window.openBVModal(url); }"
+            )
+
             model_selector.change(
                 fn=self.select_model,
                 inputs=[model_selector],
