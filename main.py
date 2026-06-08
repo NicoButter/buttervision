@@ -249,8 +249,6 @@ def main():
         "inbrowser": False,  # No abrir navegador automáticamente
         "show_error": config.ui_config.show_error,
         "theme": gr.themes.Soft(),
-        "css": get_ui_css(),
-        "js": get_ui_js(),
         "footer_links": [],
     }
     

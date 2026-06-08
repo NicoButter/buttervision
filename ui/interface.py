@@ -1,6 +1,6 @@
 """
-Interfaz MVP de ButterVision.
-Solo expone Text-to-Image para estabilizar el flujo base.
+Interfaz ButterVision – Landing UI.
+Navbar fija, secciones definidas y mini footer.
 """
 import random
 from datetime import datetime
@@ -14,165 +14,439 @@ from core.model_manager import ModelManager
 
 
 UI_CSS = """
-html {
-    scroll-behavior: smooth;
-}
+/* ═══════════════════════════════════════════════════════════
+   ButterVision – Landing UI
+═══════════════════════════════════════════════════════════ */
+
+html { scroll-behavior: smooth; }
+*, *::before, *::after { box-sizing: border-box; }
+
 body,
 .gradio-container {
     background:
-        radial-gradient(circle at 15% 8%, rgba(0, 229, 255, 0.18), transparent 28%),
-        radial-gradient(circle at 84% 18%, rgba(255, 43, 214, 0.16), transparent 28%),
+        radial-gradient(circle at 14%  6%, rgba(0, 229, 255, .16) 0%, transparent 30%),
+        radial-gradient(circle at 86% 16%, rgba(255, 43, 214, .14) 0%, transparent 30%),
         linear-gradient(135deg, #070812 0%, #0b1020 48%, #12081b 100%) !important;
     color: #e5f7ff !important;
+    min-height: 100vh;
 }
 .gradio-container {
     width: 100% !important;
     max-width: none !important;
     margin: 0 !important;
-    padding: 18px 24px 40px !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+}
+/* Strip padding from Gradio's inner wrappers so content fills full width */
+.gradio-container .main,
+.gradio-container .main > .wrap {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    gap: 0 !important;
+}
+/* Rows and columns inside main: full width, no extra lateral padding */
+.gradio-container .main .gap,
+.gradio-container .main > .wrap > .gap {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+/* Content rows (generate / output sections): add lateral padding here */
+.gradio-container .main > .wrap > .gap > .block,
+.gradio-container .main > .wrap > .gap > div:not([class*="bv-navbar"]):not([class*="bv-footer"]) {
+    padding-left: 32px !important;
+    padding-right: 32px !important;
+    max-width: 100% !important;
     box-sizing: border-box !important;
 }
+/* Hide Gradio's built-in footer ("Built with Gradio") */
+.gradio-container footer,
+.gradio-container > .footer,
+.built-with,
+footer[class*="svelte"],
+.svelte-1rjryqp:not(.bv-footer) {
+    display: none !important;
+}
+/* grid overlay */
 .gradio-container::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
+    z-index: 0;
     background:
-        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-    background-size: 42px 42px;
-    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent 75%);
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,.45), transparent 65%);
 }
-.topbar {
-    position: sticky;
-    top: 12px;
-    z-index: 20;
-    align-items: center;
-    border: 1px solid rgba(0, 229, 255, 0.24);
-    border-radius: 8px;
-    padding: 11px 12px;
-    background: rgba(8, 13, 28, 0.82);
+
+/* ── NAVBAR ─────────────────────────────────────────────────── */
+.bv-navbar {
+    position: relative !important;
+    z-index: 10 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    /* Break out of any residual container padding */
+    margin-left: calc(50% - 50vw) !important;
+    margin-right: calc(50% - 50vw) !important;
+    min-height: 64px !important;
+    gap: 0 !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    padding: 0 32px !important;
+    background: rgba(5, 8, 20, .96) !important;
+    backdrop-filter: blur(22px) !important;
+    -webkit-backdrop-filter: blur(22px) !important;
+    border-bottom: 1px solid rgba(0, 229, 255, .18) !important;
     box-shadow:
-        0 18px 45px rgba(0, 0, 0, 0.38),
-        inset 0 0 0 1px rgba(255,255,255,0.04),
-        0 0 26px rgba(0, 229, 255, 0.08);
-    backdrop-filter: blur(18px);
-    margin-bottom: 18px;
-    transition: padding 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+        0 4px 32px rgba(0, 0, 0, .44),
+        inset 0 -1px 0 rgba(0, 229, 255, .06) !important;
+    margin-bottom: 0 !important;
 }
-.topbar.bv-shrink {
-    padding: 6px 10px;
-    border-color: rgba(255, 43, 214, 0.34);
+.bv-navbar.bv-scrolled {
+    background: rgba(3, 5, 14, .96) !important;
+    border-color: rgba(255, 43, 214, .22) !important;
     box-shadow:
-        0 12px 32px rgba(0, 0, 0, 0.46),
-        inset 0 0 0 1px rgba(255,255,255,0.04),
-        0 0 22px rgba(255, 43, 214, 0.10);
+        0 4px 40px rgba(0, 0, 0, .62),
+        inset 0 -1px 0 rgba(255, 43, 214, .10) !important;
 }
-.brand {
-    font-size: 20px;
-    font-weight: 800;
-    color: #f8fbff;
+/* strip Gradio's default block chrome inside navbar */
+.bv-navbar > div,
+.bv-navbar .block,
+.bv-navbar .form,
+.bv-navbar .gap {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+/* Brand */
+.bv-brand {
+    font-size: 22px;
+    font-weight: 900;
+    color: #f0f8ff;
+    letter-spacing: -.5px;
+    text-shadow: 0 0 22px rgba(0, 229, 255, .44);
+    white-space: nowrap;
     line-height: 1;
-    padding-top: 8px;
-    letter-spacing: 0;
-    text-shadow: 0 0 16px rgba(0, 229, 255, 0.42);
+    user-select: none;
 }
 .brand-accent {
     color: #00e5ff;
 }
-.topbar .form {
-    border: 0;
-    background: transparent;
-    padding: 0;
-}
-.topbar label {
-    font-size: 11px;
-    color: #93a4b8;
-}
-.topbar .model-status {
-    min-height: 38px;
+
+/* Nav links */
+.bv-nav {
     display: flex;
+    gap: 2px;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+}
+.bv-nav-link {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 16px;
+    border-radius: 20px;
     font-size: 13px;
+    font-weight: 600;
+    color: #6888a8;
+    text-decoration: none;
+    transition: color 140ms, background 140ms;
+    cursor: pointer;
+    letter-spacing: .2px;
+}
+.bv-nav-link:hover {
+    color: #d4eeff;
+    background: rgba(0, 229, 255, .09);
+}
+
+/* Navbar model controls */
+.bv-navbar label { display: none !important; }
+.bv-navbar .wrap {
+    height: 36px !important;
+    min-height: 36px !important;
+    padding: 0 10px !important;
+    font-size: 13px !important;
+    background: rgba(255, 255, 255, .055) !important;
+    border: 1px solid rgba(0, 229, 255, .22) !important;
+    color: #c0daf0 !important;
+    border-radius: 8px !important;
+    margin: 0 !important;
+}
+.bv-navbar .wrap:focus-within {
+    border-color: rgba(0, 229, 255, .55) !important;
+    box-shadow: 0 0 0 2px rgba(0, 229, 255, .12) !important;
+}
+
+/* Refresh button */
+.bv-refresh-btn button {
+    height: 36px !important;
+    width: 36px !important;
+    min-width: 36px !important;
+    max-width: 36px !important;
+    padding: 0 !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(0, 229, 255, .26) !important;
+    background: rgba(0, 229, 255, .06) !important;
+    color: #60b8d8 !important;
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    transition: background 130ms, border-color 130ms, color 130ms;
+}
+.bv-refresh-btn button:hover {
+    background: rgba(0, 229, 255, .18) !important;
+    border-color: rgba(0, 229, 255, .52) !important;
+    color: #c8f2ff !important;
+}
+
+/* Model status pill */
+.model-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px 14px;
+    border-radius: 20px;
+    font-size: 12px;
     font-weight: 700;
     white-space: nowrap;
-    padding: 0 12px;
     border: 1px solid;
+    line-height: 1;
 }
-.model-status-ok {
-    color: #96ffd1;
-    background: rgba(0, 255, 170, 0.11);
-    border-color: rgba(0, 255, 170, 0.38);
-    box-shadow: 0 0 18px rgba(0, 255, 170, 0.12);
+.model-status-ok   { color: #96ffd1; background: rgba(0, 255, 170, .09);  border-color: rgba(0, 255, 170, .36); }
+.model-status-bad  { color: #ffb4c8; background: rgba(255, 43, 84, .10);  border-color: rgba(255, 43, 84, .38); }
+.model-status-warn { color: #ffe7a3; background: rgba(255, 198, 41, .09); border-color: rgba(255, 198, 41, .32); }
+
+/* ── SECTION SEPARATORS ──────────────────────────────────────── */
+.bv-section-sep {
+    padding: 52px 32px 24px;
+    scroll-margin-top: 72px;
 }
-.model-status-bad {
-    color: #ffb4c8;
-    background: rgba(255, 43, 84, 0.12);
-    border-color: rgba(255, 43, 84, 0.42);
-    box-shadow: 0 0 18px rgba(255, 43, 84, 0.12);
+.bv-section-eyebrow {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 2.8px;
+    text-transform: uppercase;
+    color: #00e5ff;
+    opacity: .75;
+    margin-bottom: 7px;
 }
-.model-status-warn {
-    color: #ffe7a3;
-    background: rgba(255, 198, 41, 0.11);
-    border-color: rgba(255, 198, 41, 0.35);
-}
-.bv-panel,
-.bv-output {
-    border: 1px solid rgba(0, 229, 255, 0.16);
-    border-radius: 8px;
-    background: linear-gradient(180deg, rgba(13, 20, 38, 0.86), rgba(8, 12, 24, 0.92));
-    box-shadow:
-        0 20px 50px rgba(0, 0, 0, 0.38),
-        inset 0 0 0 1px rgba(255,255,255,0.035);
-    padding: 16px;
-}
-.bv-panel h2,
-.bv-output h2 {
-    margin: 0 0 12px;
-    color: #f8fbff;
-    font-size: 16px;
+.bv-section-heading {
+    font-size: 22px;
     font-weight: 800;
+    color: #eef6ff;
+    margin-bottom: 18px;
+    line-height: 1.2;
+    letter-spacing: -.3px;
 }
-.bv-panel label,
-.bv-output label {
-    color: #b9c9dc !important;
+.bv-section-rule {
+    height: 1px;
+    background: linear-gradient(
+        90deg,
+        rgba(0, 229, 255, .38) 0%,
+        rgba(255, 43, 214, .22) 42%,
+        transparent 72%
+    );
 }
-.bv-panel textarea,
-.bv-panel input,
-.bv-panel .wrap,
-.bv-output textarea {
-    background: rgba(4, 9, 20, 0.68) !important;
-    color: #e8f8ff !important;
-    border-color: rgba(0, 229, 255, 0.20) !important;
+
+/* ── CARDS ───────────────────────────────────────────────────── */
+.bv-card {
+    border: 1px solid rgba(0, 229, 255, .14) !important;
+    border-radius: 14px !important;
+    background: linear-gradient(160deg, rgba(14, 22, 44, .90), rgba(8, 12, 26, .95)) !important;
+    box-shadow:
+        0 24px 64px rgba(0, 0, 0, .40),
+        inset 0 0 0 1px rgba(255, 255, 255, .028) !important;
+    padding: 22px 22px 18px !important;
+    transition: border-color 200ms;
 }
-.bv-panel textarea:focus,
-.bv-panel input:focus {
-    border-color: rgba(0, 229, 255, 0.62) !important;
-    box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.30), 0 0 20px rgba(0, 229, 255, 0.12) !important;
+.bv-card:hover { border-color: rgba(0, 229, 255, .28) !important; }
+.bv-card-params { border-color: rgba(255, 43, 214, .16) !important; }
+.bv-card-params:hover { border-color: rgba(255, 43, 214, .32) !important; }
+
+.bv-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 800;
+    color: #cce4f8;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, .055);
+    letter-spacing: .2px;
 }
-.bv-panel .gr-button-primary {
-    border: 1px solid rgba(0, 229, 255, 0.68) !important;
-    background: linear-gradient(90deg, #00e5ff, #ff2bd6) !important;
-    color: #050712 !important;
-    font-weight: 900 !important;
-    box-shadow: 0 0 28px rgba(0, 229, 255, 0.20);
+.bv-card-icon { font-size: 11px; color: #00e5ff; }
+
+/* ── CARD BACKGROUNDS ──────────────────────────────────────────── */
+.bv-card {
+    background: rgba(9, 14, 30, .92) !important;
 }
-.bv-panel .gr-button-primary:hover {
-    filter: brightness(1.08);
-    box-shadow: 0 0 36px rgba(255, 43, 214, 0.26);
+.bv-card-params {
+    background: rgba(10, 10, 26, .94) !important;
 }
-.bv-params {
-    border-color: rgba(255, 43, 214, 0.20);
+
+/* ── LABEL OVERRIDES (strip Gradio's purple pill) ──────────────── */
+.bv-card label,
+.bv-card label > span,
+.bv-card .label-wrap,
+.bv-card .label-wrap > span,
+.bv-card .block > label,
+.bv-card .block > label > span,
+.bv-card [data-testid] > label > span {
+    display: inline !important;
+    padding: 0 !important;
+    margin: 0 0 4px 0 !important;
+    background: none !important;
+    background-color: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    color: #6a8aaa !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: .4px !important;
+    text-transform: uppercase !important;
+    box-shadow: none !important;
 }
-.bv-output {
-    margin-top: 18px;
-}
-.bv-output .image-container,
-.bv-output img {
+
+/* ── INPUTS & TEXTAREAS ────────────────────────────────────────── */
+.bv-card textarea,
+.bv-card input[type="text"],
+.bv-card input[type="number"],
+.bv-card .wrap {
+    background: rgba(3, 6, 18, .80) !important;
+    color: #d8eeff !important;
+    border: 1px solid rgba(0, 229, 255, .16) !important;
     border-radius: 8px !important;
+    font-size: 13px !important;
+    transition: border-color 150ms, box-shadow 150ms !important;
 }
+.bv-card textarea:focus,
+.bv-card input[type="text"]:focus,
+.bv-card input[type="number"]:focus {
+    border-color: rgba(0, 229, 255, .50) !important;
+    box-shadow: 0 0 0 2px rgba(0, 229, 255, .09), 0 0 14px rgba(0, 229, 255, .07) !important;
+    outline: none !important;
+}
+/* Number input (Seed) */
+.bv-card input[type="number"] {
+    -moz-appearance: textfield !important;
+}
+
+/* ── SLIDERS ───────────────────────────────────────────────────── */
+.bv-card input[type="range"] {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    height: 4px !important;
+    border-radius: 4px !important;
+    background: rgba(0, 229, 255, .18) !important;
+    border: none !important;
+    outline: none !important;
+    cursor: pointer !important;
+}
+.bv-card input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none !important;
+    width: 16px !important;
+    height: 16px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #00e5ff, #a040ff) !important;
+    border: 2px solid rgba(255, 255, 255, .22) !important;
+    box-shadow: 0 0 8px rgba(0, 229, 255, .35) !important;
+    cursor: pointer !important;
+    transition: transform 140ms !important;
+}
+.bv-card input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.18) !important;
+    box-shadow: 0 0 14px rgba(0, 229, 255, .55) !important;
+}
+.bv-card input[type="range"]::-moz-range-thumb {
+    width: 16px !important;
+    height: 16px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #00e5ff, #a040ff) !important;
+    border: 2px solid rgba(255, 255, 255, .22) !important;
+    cursor: pointer !important;
+}
+/* Slider row: min/max values */
+.bv-card .range-container,
+.bv-card .range-min,
+.bv-card .range-max {
+    color: #3a5570 !important;
+    font-size: 11px !important;
+}
+/* Slider value input box */
+.bv-card .value-input input {
+    background: rgba(3, 6, 18, .70) !important;
+    border: 1px solid rgba(0, 229, 255, .14) !important;
+    color: #9bbfd8 !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    text-align: center !important;
+}
+
+/* Generate button */
+.bv-generate-btn { margin-top: 8px; }
+.bv-generate-btn button {
+    width: 100% !important;
+    padding: 14px 0 !important;
+    border-radius: 10px !important;
+    font-size: 15px !important;
+    font-weight: 900 !important;
+    letter-spacing: .4px !important;
+    background: linear-gradient(90deg, #00e5ff 0%, #ff2bd6 100%) !important;
+    border: none !important;
+    color: #04070f !important;
+    box-shadow:
+        0 0 32px rgba(0, 229, 255, .22),
+        0 0 64px rgba(255, 43, 214, .12) !important;
+    transition: filter 140ms, box-shadow 140ms !important;
+}
+.bv-generate-btn button:hover {
+    filter: brightness(1.10) !important;
+    box-shadow:
+        0 0 44px rgba(0, 229, 255, .34),
+        0 0 88px rgba(255, 43, 214, .22) !important;
+}
+
+/* ── OUTPUT CARDS ────────────────────────────────────────────── */
+.bv-output-card {
+    border: 1px solid rgba(0, 229, 255, .14) !important;
+    border-radius: 14px !important;
+    background: linear-gradient(160deg, rgba(14, 22, 44, .90), rgba(8, 12, 26, .95)) !important;
+    box-shadow:
+        0 24px 64px rgba(0, 0, 0, .40),
+        inset 0 0 0 1px rgba(255, 255, 255, .028) !important;
+    padding: 22px !important;
+}
+.bv-output-card .image-container,
+.bv-output-card img { border-radius: 10px !important; }
+.bv-output-card label { color: #8aa4c0 !important; font-size: 12px !important; font-weight: 600 !important; }
+
+.bv-info-card {
+    border: 1px solid rgba(255, 43, 214, .14) !important;
+    border-radius: 14px !important;
+    background: linear-gradient(160deg, rgba(14, 22, 44, .90), rgba(8, 12, 26, .95)) !important;
+    box-shadow:
+        0 24px 64px rgba(0, 0, 0, .40),
+        inset 0 0 0 1px rgba(255, 255, 255, .028) !important;
+    padding: 22px !important;
+}
+.bv-info-card label { color: #8aa4c0 !important; font-size: 12px !important; font-weight: 600 !important; }
+.bv-info-card textarea {
+    background: rgba(4, 9, 22, .76) !important;
+    color: #b8d0e8 !important;
+    border-color: rgba(255, 43, 214, .16) !important;
+    border-radius: 8px !important;
+    font-size: 12px !important;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+}
+
+/* ── MODAL ───────────────────────────────────────────────────── */
 .bv-image-modal {
     position: fixed;
     inset: 0;
@@ -182,98 +456,134 @@ body,
     justify-content: center;
     padding: 28px;
     background:
-        radial-gradient(circle at 50% 42%, rgba(0, 229, 255, 0.18), transparent 35%),
-        rgba(2, 6, 14, 0.78);
-    backdrop-filter: blur(18px);
+        radial-gradient(circle at 50% 42%, rgba(0, 229, 255, .16), transparent 38%),
+        rgba(2, 5, 14, .80);
+    backdrop-filter: blur(20px);
     opacity: 0;
     pointer-events: none;
     transition: opacity 220ms ease;
 }
-.bv-image-modal.bv-modal-open {
-    opacity: 1;
-    pointer-events: auto;
-}
+.bv-image-modal.bv-modal-open { opacity: 1; pointer-events: auto; }
 .bv-modal-shell {
     width: min(92vw, 980px);
     max-height: 92vh;
-    border: 1px solid rgba(0, 229, 255, 0.35);
-    border-radius: 8px;
-    background: linear-gradient(180deg, rgba(10, 17, 34, 0.96), rgba(5, 8, 18, 0.98));
+    border: 1px solid rgba(0, 229, 255, .34);
+    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(10, 17, 34, .97), rgba(5, 8, 20, .99));
     box-shadow:
-        0 0 60px rgba(0, 229, 255, 0.22),
-        0 0 90px rgba(255, 43, 214, 0.12),
-        0 28px 80px rgba(0, 0, 0, 0.62);
-    transform: translateY(18px) scale(0.96);
+        0 0 64px rgba(0, 229, 255, .22),
+        0 0 100px rgba(255, 43, 214, .12),
+        0 32px 80px rgba(0, 0, 0, .66);
+    transform: translateY(20px) scale(0.96);
     transition: transform 260ms cubic-bezier(.2,.8,.2,1);
     overflow: hidden;
 }
-.bv-image-modal.bv-modal-open .bv-modal-shell {
-    transform: translateY(0) scale(1);
-}
+.bv-image-modal.bv-modal-open .bv-modal-shell { transform: translateY(0) scale(1); }
 .bv-modal-bar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 12px;
-    border-bottom: 1px solid rgba(0, 229, 255, 0.18);
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(0, 229, 255, .16);
 }
-.bv-modal-title {
-    color: #f8fbff;
-    font-size: 13px;
-    font-weight: 800;
-}
+.bv-modal-title { color: #e8f6ff; font-size: 13px; font-weight: 800; }
 .bv-modal-close {
     appearance: none;
-    border: 1px solid rgba(255, 43, 214, 0.42);
-    border-radius: 6px;
-    background: rgba(255, 43, 214, 0.10);
-    color: #ffd7f7;
+    border: 1px solid rgba(255, 43, 214, .40);
+    border-radius: 8px;
+    background: rgba(255, 43, 214, .09);
+    color: #ffd6f5;
     width: 34px;
     height: 30px;
     cursor: pointer;
+    font-size: 16px;
+    transition: background 130ms;
 }
-.bv-modal-close:hover {
-    background: rgba(255, 43, 214, 0.22);
-}
-.bv-modal-image-wrap {
-    padding: 14px;
-}
+.bv-modal-close:hover { background: rgba(255, 43, 214, .22); }
+.bv-modal-image-wrap { padding: 16px; }
 #bv-modal-image {
     display: block;
     width: 100%;
     max-height: 76vh;
     object-fit: contain;
     border-radius: 8px;
-    box-shadow: 0 0 32px rgba(0, 229, 255, 0.12);
+    box-shadow: 0 0 32px rgba(0, 229, 255, .12);
 }
-@media (max-width: 780px) {
-    .gradio-container {
-        padding: 10px 10px 28px !important;
-    }
-    .topbar {
-        top: 6px;
-    }
-    .brand {
-        font-size: 18px;
-    }
-    .topbar .model-status {
-        justify-content: flex-start;
-    }
-    .bv-image-modal {
-        padding: 12px;
-    }
+
+/* ── FOOTER ──────────────────────────────────────────────────── */
+.bv-footer {
+    display: block !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    /* Break out of any residual container padding */
+    margin-left: calc(50% - 50vw) !important;
+    margin-right: calc(50% - 50vw) !important;
+    margin-top: 60px;
+    margin-bottom: 0 !important;
+    padding: 28px 32px 32px;
+    border-top: 1px solid rgba(0, 229, 255, .10);
+    background: linear-gradient(0deg, rgba(2, 4, 14, .82), transparent);
+}
+.bv-footer-inner {
+    max-width: 100%;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
+}
+.bv-footer-left { display: flex; flex-direction: column; gap: 4px; }
+.bv-footer-brand { font-size: 16px; font-weight: 900; color: #6888a0; letter-spacing: -.3px; }
+.bv-footer-brand span { color: #00e5ff; opacity: .65; }
+.bv-footer-tagline { font-size: 11.5px; color: #364e66; font-weight: 500; }
+.bv-footer-right { display: flex; align-items: center; gap: 20px; }
+.bv-footer-tech { display: flex; gap: 6px; align-items: center; }
+.bv-footer-badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 20px;
+    color: #4e6880;
+    border: 1px solid rgba(78, 104, 128, .28);
+    letter-spacing: .5px;
+}
+.bv-footer-copy { font-size: 11px; color: #2c3e52; }
+
+/* Kill any Gradio-added space after the last block */
+.gradio-container > .main > .wrap > *:last-child,
+.gradio-container > *:last-child {
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+}
+/* Ensure body/html end at footer with no extra scroll space */
+body {
+    overflow-x: hidden !important;
+}
+html {
+    overflow-x: hidden !important;
+}
+
+/* ── RESPONSIVE ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+    .bv-navbar { padding: 0 16px !important; }
+    .bv-nav { display: none !important; }
+    .bv-section-sep { padding: 36px 16px 18px; }
+    .bv-footer { padding: 22px 16px 28px !important; }
+    .bv-footer-right { display: none; }
+    .bv-image-modal { padding: 12px; }
 }
 """
 
 UI_JS = """
-() => {
+function() {
   const state = window.__buttervisionState || { lastModalSrc: null };
   window.__buttervisionState = state;
 
-  const updateTopbar = () => {
-    const topbar = document.querySelector('.topbar');
-    if (!topbar) return;
-    topbar.classList.toggle('bv-shrink', window.scrollY > 36);
+  const updateNavbar = () => {
+    const navbar = document.querySelector('.bv-navbar');
+    if (!navbar) return;
+    navbar.classList.toggle('bv-scrolled', window.scrollY > 40);
   };
 
   const closeModal = () => {
@@ -315,7 +625,7 @@ UI_JS = """
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['src']
+      attributeFilter: ['src'],
     });
 
     const image = findGeneratedImage();
@@ -327,15 +637,14 @@ UI_JS = """
     if (event.target?.matches?.('[data-bv-modal-close]')) closeModal();
     if (event.target?.id === 'bv-image-modal') closeModal();
   });
-
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeModal();
   });
 
-  window.addEventListener('scroll', updateTopbar, { passive: true });
-  updateTopbar();
+  window.addEventListener('scroll', updateNavbar, { passive: true });
+  updateNavbar();
   const readyTimer = setInterval(() => {
-    updateTopbar();
+    updateNavbar();
     watchGeneratedImage();
   }, 500);
   setTimeout(() => clearInterval(readyTimer), 15000);
@@ -479,119 +788,168 @@ class ButterVisionUI:
             return None, f"Error: {error}"
 
     def create_interface(self):
-        """Crea la interfaz Text-to-Image."""
-        with gr.Blocks(title="ButterVision - Text to Image") as interface:
+        """Crea la interfaz landing-page de ButterVision."""
+        with gr.Blocks(title="ButterVision", css=get_ui_css(), js=get_ui_js()) as interface:
 
             active_model = self.sd_manager.model_id
-            with gr.Row(elem_classes=["topbar"]):
-                with gr.Column(scale=1, min_width=150):
-                    gr.HTML("<div class='brand'>Butter<span class='brand-accent'>Vision</span></div>")
-                with gr.Column(scale=4, min_width=320):
-                    model_selector = gr.Dropdown(
-                        choices=self.model_choices,
-                        value=active_model,
-                        label="Modelo actual",
+
+            # ── NAVBAR ──────────────────────────────────────────────────
+            with gr.Row(elem_classes=["bv-navbar"]):
+                with gr.Column(scale=0, min_width=200):
+                    gr.HTML(
+                        "<div class='bv-brand'>"
+                        "Butter<span class='brand-accent'>Vision</span>"
+                        "</div>"
                     )
-                with gr.Column(scale=0, min_width=56):
-                    refresh_models_btn = gr.Button("↻", size="sm")
-                with gr.Column(scale=2, min_width=220):
+                with gr.Column(scale=1, min_width=180):
+                    gr.HTML(
+                        "<nav class='bv-nav'>"
+                        "<a class='bv-nav-link' href='#bv-gen'>Generate</a>"
+                        "<a class='bv-nav-link' href='#bv-out'>Output</a>"
+                        "</nav>"
+                    )
+                with gr.Column(scale=3, min_width=340):
+                    with gr.Row():
+                        model_selector = gr.Dropdown(
+                            choices=self.model_choices,
+                            value=active_model,
+                            label="",
+                            scale=4,
+                        )
+                        refresh_models_btn = gr.Button(
+                            "↻", size="sm", scale=0, min_width=36,
+                            elem_classes=["bv-refresh-btn"],
+                        )
+                with gr.Column(scale=1, min_width=180):
                     model_status = gr.HTML(value=self._model_status_html(active_model))
 
-            with gr.Row():
-                with gr.Column(scale=2, elem_classes=["bv-panel", "bv-prompts"]):
-                    gr.HTML("<h2>Prompt</h2>")
+            # ── SECTION: GENERATE ────────────────────────────────────────
+            gr.HTML(
+                "<div class='bv-section-sep' id='bv-gen'>"
+                "<div class='bv-section-eyebrow'>Text to Image</div>"
+                "<div class='bv-section-heading'>Generate</div>"
+                "<div class='bv-section-rule'></div>"
+                "</div>"
+            )
+
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=3, elem_classes=["bv-card"]):
+                    gr.HTML(
+                        "<div class='bv-card-header'>"
+                        "<span class='bv-card-icon'>✦</span> Prompt"
+                        "</div>"
+                    )
                     prompt = gr.Textbox(
                         label="Prompt",
-                        placeholder="Describe la imagen que quieres generar...",
+                        placeholder="Describe the image you want to generate…",
                         lines=4,
                     )
                     negative_prompt = gr.Textbox(
                         label="Negative Prompt",
-                        placeholder="Elementos a evitar...",
+                        placeholder="Elements to avoid…",
                         lines=3,
                     )
+                    with gr.Row(elem_classes=["bv-generate-btn"]):
+                        generate_btn = gr.Button("✦  Generate", variant="primary", size="lg")
 
-                    generate_btn = gr.Button("Generate", variant="primary", size="lg")
-
-                with gr.Column(scale=1, elem_classes=["bv-panel", "bv-params"]):
-                    gr.HTML("<h2>Parámetros</h2>")
+                with gr.Column(scale=2, elem_classes=["bv-card", "bv-card-params"]):
+                    gr.HTML(
+                        "<div class='bv-card-header'>"
+                        "<span class='bv-card-icon'>⚙</span> Parameters"
+                        "</div>"
+                    )
                     steps = gr.Slider(
-                        minimum=1,
-                        maximum=60,
+                        minimum=1, maximum=60,
                         value=config.model_config.default_steps,
-                        step=1,
-                        label="Steps",
+                        step=1, label="Steps",
                     )
                     cfg_scale = gr.Slider(
-                        minimum=1.0,
-                        maximum=15.0,
+                        minimum=1.0, maximum=15.0,
                         value=config.model_config.default_cfg_scale,
-                        step=0.5,
-                        label="CFG Scale",
+                        step=0.5, label="CFG Scale",
                     )
                     width = gr.Slider(
-                        minimum=256,
-                        maximum=768,
+                        minimum=256, maximum=768,
                         value=config.model_config.default_width,
-                        step=64,
-                        label="Width",
+                        step=64, label="Width",
                     )
                     height = gr.Slider(
-                        minimum=256,
-                        maximum=768,
+                        minimum=256, maximum=768,
                         value=config.model_config.default_height,
-                        step=64,
-                        label="Height",
+                        step=64, label="Height",
                     )
-                    seed = gr.Number(value=-1, label="Seed (-1 = random)", precision=0)
+                    seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
 
-            with gr.Column(elem_classes=["bv-output"]):
-                gr.HTML("<h2>Generated Image</h2>")
-                with gr.Row():
+            # ── SECTION: OUTPUT ──────────────────────────────────────────
+            gr.HTML(
+                "<div class='bv-section-sep' id='bv-out'>"
+                "<div class='bv-section-eyebrow'>Result</div>"
+                "<div class='bv-section-heading'>Output</div>"
+                "<div class='bv-section-rule'></div>"
+                "</div>"
+            )
+
+            with gr.Row(equal_height=False):
+                with gr.Column(scale=3, elem_classes=["bv-output-card"]):
                     image_output = gr.Image(
                         type="pil",
                         label="Generated Image",
                         height=512,
                         elem_id="bv-generated-image",
                     )
-                    info_text = gr.Textbox(label="Info", interactive=False, lines=5)
+                with gr.Column(scale=2, elem_classes=["bv-info-card"]):
+                    info_text = gr.Textbox(
+                        label="Generation Info",
+                        interactive=False,
+                        lines=7,
+                    )
 
+            # ── FOOTER ────────────────────────────────────────────────
             gr.HTML(
-                """
-                <div id="bv-image-modal" class="bv-image-modal">
-                    <div class="bv-modal-shell">
-                        <div class="bv-modal-bar">
-                            <div class="bv-modal-title">Generated Image</div>
-                            <button class="bv-modal-close" data-bv-modal-close type="button">×</button>
-                        </div>
-                        <div class="bv-modal-image-wrap">
-                            <img id="bv-modal-image" alt="Generated image preview" />
-                        </div>
-                    </div>
-                </div>
-                """
+                "<footer class='bv-footer'>"
+                "<div class='bv-footer-inner'>"
+                "<div class='bv-footer-left'>"
+                "<div class='bv-footer-brand'>Butter<span>Vision</span></div>"
+                "<div class='bv-footer-tagline'>AI Image Generation · Stable Diffusion</div>"
+                "</div>"
+                "<div class='bv-footer-right'>"
+                "<div class='bv-footer-tech'>"
+                "<span class='bv-footer-badge'>Gradio</span>"
+                "<span class='bv-footer-badge'>Diffusers</span>"
+                "<span class='bv-footer-badge'>PyTorch</span>"
+                "</div>"
+                "<div class='bv-footer-copy'>© 2024 ButterVision</div>"
+                "</div>"
+                "</div>"
+                "</footer>"
             )
 
+            # ── MODAL (Fuera del footer) ──────────────────────────────
+            gr.HTML(
+                "<div id='bv-image-modal' class='bv-image-modal'>"
+                "<div class='bv-modal-shell'>"
+                "<div class='bv-modal-bar'>"
+                "<div class='bv-modal-title'>Generated Image</div>"
+                "<button class='bv-modal-close' data-bv-modal-close type='button'>×</button>"
+                "</div>"
+                "<div class='bv-modal-image-wrap'>"
+                "<img id='bv-modal-image' alt='Generated image preview' />"
+                "</div>"
+                "</div>"
+                "</div>"
+            )
+
+            # ── EVENT HANDLERS ───────────────────────────────────────────
             generate_btn.click(
                 fn=self.txt2img_generate,
-                inputs=[
-                    prompt,
-                    negative_prompt,
-                    steps,
-                    cfg_scale,
-                    width,
-                    height,
-                    seed,
-                ],
+                inputs=[prompt, negative_prompt, steps, cfg_scale, width, height, seed],
                 outputs=[image_output, info_text],
             )
-
             model_selector.change(
                 fn=self.select_model,
                 inputs=[model_selector],
                 outputs=[model_status],
             )
-
             refresh_models_btn.click(
                 fn=self.refresh_models,
                 inputs=[],
