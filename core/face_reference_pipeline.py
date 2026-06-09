@@ -34,11 +34,15 @@ class SD15FaceReferencePipeline:
         )
         self.device = device if self._cuda_is_available() else "cpu"
         self.pipe = None
+        self.image_encoder = None
 
     def cleanup(self):
         if self.pipe is not None:
             del self.pipe
             self.pipe = None
+        if self.image_encoder is not None:
+            del self.image_encoder
+            self.image_encoder = None
 
         gc.collect()
         try:
@@ -130,9 +134,8 @@ class SD15FaceReferencePipeline:
         )
         pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
 
-        print("🧠 Cargando CLIP-H local para IP-Adapter Face...", flush=True)
-        image_encoder = self._load_clip_vision(dtype=dtype)
-        pipe.register_modules(image_encoder=image_encoder)
+        print("🧠 Cargando CLIP-H local para embeddings IP-Adapter Face...", flush=True)
+        self.image_encoder = self._load_clip_vision(dtype=dtype)
 
         print("🧠 Cargando IP-Adapter Plus Face SD1.5...", flush=True)
         pipe.load_ip_adapter(
@@ -164,6 +167,52 @@ class SD15FaceReferencePipeline:
         print("✅ Face Reference SD1.5/IP-Adapter listo", flush=True)
         return self.pipe
 
+    def _encode_ip_adapter_image(self, pipe, face_image, num_images_per_prompt, do_classifier_free_guidance):
+        torch = self._load_torch()
+        from diffusers.models.embeddings import ImageProjection
+
+        if self.image_encoder is None:
+            dtype = torch.float16 if self.device == "cuda" else torch.float32
+            self.image_encoder = self._load_clip_vision(dtype=dtype)
+
+        image_projection_layer = pipe.unet.encoder_hid_proj.image_projection_layers[0]
+        output_hidden_states = not isinstance(image_projection_layer, ImageProjection)
+
+        encode_device = torch.device(self.device)
+        dtype = next(self.image_encoder.parameters()).dtype
+        print(
+            f"🧠 Calculando embeddings IP-Adapter Face en {encode_device} ({dtype})...",
+            flush=True,
+        )
+
+        self.image_encoder.to(encode_device)
+        image = pipe.feature_extractor(face_image.convert("RGB"), return_tensors="pt").pixel_values
+        image = image.to(device=encode_device, dtype=dtype)
+
+        with torch.no_grad():
+            if output_hidden_states:
+                image_embeds = self.image_encoder(image, output_hidden_states=True).hidden_states[-2]
+                negative_image_embeds = self.image_encoder(
+                    torch.zeros_like(image), output_hidden_states=True
+                ).hidden_states[-2]
+            else:
+                image_embeds = self.image_encoder(image).image_embeds
+                negative_image_embeds = torch.zeros_like(image_embeds)
+
+        image_embeds = image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
+        negative_image_embeds = negative_image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
+
+        if do_classifier_free_guidance:
+            image_embeds = torch.cat([negative_image_embeds, image_embeds], dim=0)
+
+        image_embeds = image_embeds.detach().to("cpu")
+        self.image_encoder.to("cpu")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print("✅ Embeddings IP-Adapter Face listos", flush=True)
+        return [image_embeds]
+
     def generate(
         self,
         face_image: Image.Image,
@@ -182,6 +231,12 @@ class SD15FaceReferencePipeline:
         self.ensure_assets(allow_download=False)
         pipe = self._load_pipeline()
         pipe.set_ip_adapter_scale(float(identity_strength))
+        ip_adapter_image_embeds = self._encode_ip_adapter_image(
+            pipe=pipe,
+            face_image=face_image,
+            num_images_per_prompt=num_images,
+            do_classifier_free_guidance=guidance_scale > 1.0,
+        )
 
         generator = None
         if seed != -1:
@@ -195,7 +250,7 @@ class SD15FaceReferencePipeline:
         result = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
-            ip_adapter_image=face_image.convert("RGB"),
+            ip_adapter_image_embeds=ip_adapter_image_embeds,
             width=width,
             height=height,
             num_inference_steps=steps,

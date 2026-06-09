@@ -48,3 +48,7 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# Web frontend
+web/node_modules/
+web/dist/
