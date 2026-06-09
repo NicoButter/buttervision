@@ -1,0 +1,23 @@
+{
+  "module": "face_reference",
+  "backend": "InstantID",
+  "created_at": "2026-06-08T20:09:03",
+  "prompt": "mujer en la playa",
+  "negative_prompt": "cuerpo deforme",
+  "seed": 650682850,
+  "steps": 15,
+  "cfg_scale": 5.0,
+  "width": 512,
+  "height": 512,
+  "batch_size": 1,
+  "identity_strength": 0.8,
+  "structure_strength": 0.8,
+  "model": "stabilityai/stable-diffusion-xl-base-1.0",
+  "generation_dir": "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-200903-generation",
+  "images": [
+    "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-200903-generation/image_01.png"
+  ],
+  "reference_images": [
+    "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-200903-generation/reference_face.png"
+  ]
+}

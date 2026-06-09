@@ -136,7 +136,10 @@ class StableDiffusionManager:
         
         # 4. VAE slicing (procesa VAE en batches pequeños)
         if config.model_config.enable_vae_slicing:
-            pipe.enable_vae_slicing()
+            try:
+                pipe.vae.enable_slicing()
+            except Exception:
+                pipe.enable_vae_slicing()
             print("✅ VAE slicing activado")
         
         # 5. CPU offload (para VRAM extremadamente baja < 4GB)

@@ -1,0 +1,23 @@
+{
+  "module": "face_reference",
+  "backend": "InstantID",
+  "created_at": "2026-06-08T20:14:33",
+  "prompt": "mujer en la ventana",
+  "negative_prompt": "",
+  "seed": 4217677985,
+  "steps": 15,
+  "cfg_scale": 5.0,
+  "width": 512,
+  "height": 512,
+  "batch_size": 1,
+  "identity_strength": 0.3,
+  "structure_strength": 0.35,
+  "model": "stabilityai/stable-diffusion-xl-base-1.0",
+  "generation_dir": "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-201433-generation",
+  "images": [
+    "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-201433-generation/image_01.png"
+  ],
+  "reference_images": [
+    "/home/lordcommander/proyectos_2024/buttervision/outputs/08062026-201433-generation/reference_face.png"
+  ]
+}

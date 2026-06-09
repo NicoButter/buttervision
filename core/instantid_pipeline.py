@@ -219,8 +219,16 @@ class InstantIDPipeline:
         if self.face_app is not None:
             return self.face_app
 
+        cuda_provider_available = False
+        try:
+            import onnxruntime as ort
+
+            cuda_provider_available = "CUDAExecutionProvider" in ort.get_available_providers()
+        except Exception:
+            pass
+
         providers = ["CPUExecutionProvider"]
-        if self.device == "cuda":
+        if self.device == "cuda" and cuda_provider_available:
             providers.insert(0, "CUDAExecutionProvider")
 
         self.face_app = FaceAnalysis(
@@ -228,7 +236,11 @@ class InstantIDPipeline:
             root=str(self.face_model_root),
             providers=providers,
         )
-        self.face_app.prepare(ctx_id=0 if self.device == "cuda" else -1, det_size=(640, 640))
+        print(f"🧑 Face Reference providers: {providers}", flush=True)
+        self.face_app.prepare(
+            ctx_id=0 if self.device == "cuda" and cuda_provider_available else -1,
+            det_size=(config.model_config.face_det_size, config.model_config.face_det_size),
+        )
         return self.face_app
 
     def _load_pipeline(self, ControlNetModel):
@@ -238,31 +250,56 @@ class InstantIDPipeline:
         torch = self._load_torch()
         StableDiffusionXLInstantIDPipeline = self._load_instantid_pipeline_class()
         controlnet_path, adapter_path = self._checkpoint_paths()
-        torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
+        torch_dtype = (
+            torch.float16
+            if self.device == "cuda" and config.model_config.face_use_fp16
+            else torch.float32
+        )
 
+        print(
+            f"🧠 Cargando InstantID ControlNet ({torch_dtype}, low VRAM)...",
+            flush=True,
+        )
         controlnet = ControlNetModel.from_pretrained(
             str(controlnet_path),
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
+            low_cpu_mem_usage=True,
         )
+        print("✅ InstantID ControlNet cargado", flush=True)
+
+        print(f"🧠 Cargando SDXL base para Face Reference: {self.base_model}", flush=True)
         pipe = StableDiffusionXLInstantIDPipeline.from_pretrained(
             self.base_model,
             controlnet=controlnet,
-            torch_dtype=torch_dtype,
-            safety_checker=None,
+            dtype=torch_dtype,
             cache_dir=str(config.model_config.cache_dir),
+            low_cpu_mem_usage=True,
         )
+        print("✅ SDXL base cargado para Face Reference", flush=True)
+
+        print("🧠 Cargando IP-Adapter InstantID...", flush=True)
         pipe.load_ip_adapter_instantid(str(adapter_path))
+        print("✅ IP-Adapter InstantID cargado", flush=True)
 
         if self.device == "cuda":
+            try:
+                pipe.vae.to(dtype=torch.float32)
+                print("✅ Face Reference VAE en float32", flush=True)
+            except Exception:
+                pass
+
             try:
                 pipe.enable_attention_slicing(slice_size="max")
             except Exception:
                 pass
 
             try:
-                pipe.enable_vae_slicing()
+                pipe.vae.enable_slicing()
             except Exception:
-                pass
+                try:
+                    pipe.enable_vae_slicing()
+                except Exception:
+                    pass
 
             try:
                 pipe.vae.enable_tiling()
@@ -272,14 +309,20 @@ class InstantIDPipeline:
                 except Exception:
                     pass
 
-            try:
-                pipe.enable_sequential_cpu_offload()
-            except Exception:
-                pipe.enable_model_cpu_offload()
+            if config.model_config.face_enable_cpu_offload:
+                try:
+                    pipe.enable_sequential_cpu_offload()
+                    print("✅ Face Reference CPU offload secuencial activado", flush=True)
+                except Exception:
+                    pipe.enable_model_cpu_offload()
+                    print("✅ Face Reference CPU offload de modelo activado", flush=True)
+            else:
+                pipe = pipe.to(self.device)
         else:
             pipe = pipe.to("cpu")
 
         self.pipe = pipe
+        print("✅ Face Reference pipeline listo", flush=True)
         return self.pipe
 
     def _extract_face(self, face_image, cv2, np):
@@ -331,6 +374,7 @@ class InstantIDPipeline:
         self._load_face_app(FaceAnalysis)
         pipe = self._load_pipeline(ControlNetModel)
 
+        print("🧑 Detectando cara de referencia...", flush=True)
         face = self._extract_face(face_image, cv2, np)
         face_emb = face["embedding"]
         face_kps = self._draw_kps(face_image.convert("RGB"), face["kps"])
@@ -339,6 +383,11 @@ class InstantIDPipeline:
         if seed != -1:
             generator = torch.Generator(device="cpu").manual_seed(seed)
 
+        print(
+            f"🎨 Generando Face Reference {width}x{height}, steps={steps}, "
+            f"identity={identity_strength:.2f}, structure={structure_strength:.2f}",
+            flush=True,
+        )
         result = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -357,4 +406,5 @@ class InstantIDPipeline:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        print("✅ Face Reference generación terminada", flush=True)
         return result.images

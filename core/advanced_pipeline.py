@@ -186,7 +186,10 @@ class ButterVisionPipeline:
         print("✅ Attention slicing activado")
 
         # 5. VAE slicing (procesa VAE en batches pequeños)
-        pipeline.enable_vae_slicing()
+        try:
+            pipeline.vae.enable_slicing()
+        except Exception:
+            pipeline.enable_vae_slicing()
         print("✅ VAE slicing activado")
 
         # 6. CPU offload para GPUs de 4GB o menos

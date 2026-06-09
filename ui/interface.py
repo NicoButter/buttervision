@@ -167,6 +167,64 @@ footer[class*="svelte"],
     color: #d4eeff;
     background: rgba(0, 229, 255, .09);
 }
+.bv-tool-dropdown {
+    position: relative !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+.bv-tool-dropdown::before {
+    content: "TOOLS";
+    position: absolute;
+    left: 13px;
+    top: -7px;
+    z-index: 2;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(5, 8, 20, .98);
+    color: rgba(0, 229, 255, .82);
+    font-size: 8.5px;
+    font-weight: 900;
+    letter-spacing: 1.4px;
+    line-height: 1;
+    pointer-events: none;
+}
+.bv-navbar .bv-tool-dropdown .wrap {
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 14px !important;
+    border-radius: 12px !important;
+    background:
+        linear-gradient(135deg, rgba(0, 229, 255, .13), rgba(255, 43, 214, .08)),
+        rgba(4, 8, 20, .84) !important;
+    border: 1px solid rgba(0, 229, 255, .32) !important;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, .035) inset,
+        0 10px 28px rgba(0, 0, 0, .22),
+        0 0 24px rgba(0, 229, 255, .08) !important;
+    color: #d9f6ff !important;
+    transition: border-color 150ms, box-shadow 150ms, background 150ms !important;
+}
+.bv-navbar .bv-tool-dropdown .wrap:hover,
+.bv-navbar .bv-tool-dropdown .wrap:focus-within {
+    border-color: rgba(255, 43, 214, .48) !important;
+    background:
+        linear-gradient(135deg, rgba(0, 229, 255, .18), rgba(255, 43, 214, .12)),
+        rgba(4, 8, 20, .92) !important;
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, .05) inset,
+        0 12px 34px rgba(0, 0, 0, .30),
+        0 0 30px rgba(255, 43, 214, .12) !important;
+}
+.bv-navbar .bv-tool-dropdown input,
+.bv-navbar .bv-tool-dropdown .single-select,
+.bv-navbar .bv-tool-dropdown [data-testid="dropdown"] {
+    color: #ecfbff !important;
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    letter-spacing: .2px !important;
+}
 
 /* Navbar model controls */
 .bv-navbar label { display: none !important; }
@@ -693,11 +751,14 @@ class ButterVisionUI:
         if model_id != self.sd_manager.model_id:
             self.sd_manager.change_model(model_id)
             config.model_config.model_id = model_id
+            if hasattr(self, "instantid_manager") and self.instantid_manager is not None:
+                self.instantid_manager.cleanup()
+                self.instantid_manager = None
 
         return self._model_status_html(model_id)
 
     def switch_function(self, function_name):
-        """Muestra el panel correspondiente a la función elegida."""
+        """Muestra solo el panel correspondiente a la función elegida."""
         is_face_reference = function_name == "Face Reference"
         message = ""
 
@@ -707,21 +768,27 @@ class ButterVisionUI:
                 manager = self._get_instantid_manager()
                 message = manager.ensure_assets(allow_download=True)
             except Exception as error:
-                message = f"Error preparando InstantID: {error}"
+                message = f"Error preparando Face Reference: {error}"
         elif hasattr(self, "instantid_manager") and self.instantid_manager is not None:
             self.instantid_manager.cleanup()
 
-        return gr.update(visible=is_face_reference), message
+        return (
+            gr.update(visible=not is_face_reference),
+            gr.update(visible=is_face_reference),
+            message,
+        )
 
     def _get_instantid_manager(self):
-        """Carga InstantID solo cuando se usa Face Reference."""
+        """Carga el backend Face Reference solo cuando se usa esa herramienta."""
         if not hasattr(self, "instantid_manager"):
             self.instantid_manager = None
 
         if self.instantid_manager is None:
-            from core.instantid_pipeline import InstantIDPipeline
+            from core.face_reference_pipeline import SD15FaceReferencePipeline
 
-            self.instantid_manager = InstantIDPipeline()
+            self.instantid_manager = SD15FaceReferencePipeline(
+                base_model=self.sd_manager.model_id,
+            )
 
         return self.instantid_manager
 
@@ -846,9 +913,9 @@ class ButterVisionUI:
 
             steps = int(steps)
             cfg_scale = float(cfg_scale)
-            width = int(width)
-            height = int(height)
-            batch_size = max(1, min(int(batch_size), 4))
+            width = max(256, min(int(width), config.model_config.max_width))
+            height = max(256, min(int(height), config.model_config.max_height))
+            batch_size = max(1, min(int(batch_size), config.model_config.max_batch_size))
 
             images = self.sd_manager.generate_image(
                 prompt=prompt,
@@ -902,7 +969,7 @@ class ButterVisionUI:
         identity_strength,
         structure_strength,
     ):
-        """Genera una imagen preservando identidad facial con InstantID."""
+        """Genera una imagen preservando identidad facial con IP-Adapter Face."""
         try:
             if face_image is None:
                 return None, "Sube una imagen de referencia con una cara clara.", seed, self._load_history_gallery()
@@ -922,8 +989,8 @@ class ButterVisionUI:
 
             steps = int(steps)
             cfg_scale = float(cfg_scale)
-            width = max(512, min(int(width), 768))
-            height = max(512, min(int(height), 768))
+            width = max(512, min(int(width), config.model_config.face_max_width))
+            height = max(512, min(int(height), config.model_config.face_max_height))
             batch_size = 1
             identity_strength = float(identity_strength)
             structure_strength = float(structure_strength)
@@ -947,7 +1014,7 @@ class ButterVisionUI:
             created_at = datetime.now().isoformat(timespec="seconds")
             metadata = {
                 "module": "face_reference",
-                "backend": "InstantID",
+                "backend": "SD1.5 IP-Adapter Face",
                 "created_at": created_at,
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
@@ -967,7 +1034,7 @@ class ButterVisionUI:
                 reference_images={"reference_face.png": face_image},
             )
             info = (
-                f"Mode: Face Reference / InstantID\n"
+                f"Mode: Face Reference / SD1.5 IP-Adapter Face\n"
                 f"Seed: {seed}\n"
                 f"Size: {width}x{height}\n"
                 f"Steps: {steps} | CFG: {cfg_scale:.1f}\n"
@@ -996,15 +1063,16 @@ class ButterVisionUI:
                 with gr.Column(scale=1, min_width=180):
                     gr.HTML(
                         "<nav class='bv-nav'>"
-                        "<a class='bv-nav-link' href='#bv-gen'>Generate</a>"
-                        "<a class='bv-nav-link' href='#bv-out'>Output</a>"
+                        "<a class='bv-nav-link' href='#bv-main'>Generate</a>"
                         "</nav>"
                     )
-                with gr.Column(scale=1, min_width=180):
+                with gr.Column(scale=2, min_width=280):
                     function_selector = gr.Dropdown(
                         choices=["Text to Image", "Face Reference"],
                         value="Text to Image",
                         label="",
+                        interactive=True,
+                        elem_classes=["bv-tool-dropdown"],
                     )
                 with gr.Column(scale=3, min_width=340):
                     with gr.Row():
@@ -1021,103 +1089,112 @@ class ButterVisionUI:
                 with gr.Column(scale=1, min_width=180):
                     model_status = gr.HTML(value=self._model_status_html(active_model))
 
-            # ── SECTION: GENERATE ────────────────────────────────────────
-            gr.HTML(
-                "<div class='bv-section-sep' id='bv-gen'>"
-                "<div class='bv-section-eyebrow'>Text to Image</div>"
-                "<div class='bv-section-heading'>Generate</div>"
-                "<div class='bv-section-rule'></div>"
-                "</div>"
-            )
+            with gr.Group(visible=True) as text_to_image_panel:
+                # ── SECTION: GENERATE ────────────────────────────────────
+                gr.HTML(
+                    "<div class='bv-section-sep' id='bv-main'>"
+                    "<div class='bv-section-eyebrow'>Text to Image</div>"
+                    "<div class='bv-section-heading'>Generate</div>"
+                    "<div class='bv-section-rule'></div>"
+                    "</div>"
+                )
 
-            with gr.Row(equal_height=False):
-                with gr.Column(scale=3, elem_classes=["bv-card"]):
-                    gr.HTML(
-                        "<div class='bv-card-header'>"
-                        "<span class='bv-card-icon'>✦</span> Prompt"
-                        "</div>"
-                    )
-                    prompt = gr.Textbox(
-                        label="Prompt",
-                        placeholder="Describe the image you want to generate…",
-                        lines=4,
-                    )
-                    negative_prompt = gr.Textbox(
-                        label="Negative Prompt",
-                        placeholder="Elements to avoid…",
-                        lines=3,
-                    )
-                    with gr.Row(elem_classes=["bv-generate-btn"]):
-                        generate_btn = gr.Button("✦  Generate", variant="primary", size="lg")
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=3, elem_classes=["bv-card"]):
+                        gr.HTML(
+                            "<div class='bv-card-header'>"
+                            "<span class='bv-card-icon'>✦</span> Prompt"
+                            "</div>"
+                        )
+                        prompt = gr.Textbox(
+                            label="Prompt",
+                            placeholder="Describe the image you want to generate…",
+                            lines=4,
+                        )
+                        negative_prompt = gr.Textbox(
+                            label="Negative Prompt",
+                            placeholder="Elements to avoid…",
+                            lines=3,
+                        )
+                        with gr.Row(elem_classes=["bv-generate-btn"]):
+                            generate_btn = gr.Button("✦  Generate", variant="primary", size="lg")
 
-                with gr.Column(scale=2, elem_classes=["bv-card", "bv-card-params"]):
-                    gr.HTML(
-                        "<div class='bv-card-header'>"
-                        "<span class='bv-card-icon'>⚙</span> Parameters"
-                        "</div>"
-                    )
-                    steps = gr.Slider(
-                        minimum=1, maximum=60,
-                        value=config.model_config.default_steps,
-                        step=1, label="Steps",
-                    )
-                    cfg_scale = gr.Slider(
-                        minimum=1.0, maximum=15.0,
-                        value=config.model_config.default_cfg_scale,
-                        step=0.5, label="CFG Scale",
-                    )
-                    width = gr.Slider(
-                        minimum=256, maximum=768,
-                        value=config.model_config.default_width,
-                        step=64, label="Width",
-                    )
-                    height = gr.Slider(
-                        minimum=256, maximum=768,
-                        value=config.model_config.default_height,
-                        step=64, label="Height",
-                    )
-                    batch_size = gr.Slider(
-                        minimum=1, maximum=4,
-                        value=1,
-                        step=1, label="Batch",
-                    )
-                    seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
+                    with gr.Column(scale=2, elem_classes=["bv-card", "bv-card-params"]):
+                        gr.HTML(
+                            "<div class='bv-card-header'>"
+                            "<span class='bv-card-icon'>⚙</span> Parameters"
+                            "</div>"
+                        )
+                        steps = gr.Slider(
+                            minimum=1, maximum=60,
+                            value=config.model_config.default_steps,
+                            step=1, label="Steps",
+                        )
+                        cfg_scale = gr.Slider(
+                            minimum=1.0, maximum=15.0,
+                            value=config.model_config.default_cfg_scale,
+                            step=0.5, label="CFG Scale",
+                        )
+                        width = gr.Slider(
+                            minimum=256, maximum=config.model_config.max_width,
+                            value=config.model_config.default_width,
+                            step=64, label="Width",
+                        )
+                        height = gr.Slider(
+                            minimum=256, maximum=config.model_config.max_height,
+                            value=config.model_config.default_height,
+                            step=64, label="Height",
+                        )
+                        if config.model_config.max_batch_size > 1:
+                            batch_size = gr.Slider(
+                                minimum=1, maximum=config.model_config.max_batch_size,
+                                value=config.model_config.default_batch_size,
+                                step=1, label="Batch",
+                            )
+                        else:
+                            batch_size = gr.Number(
+                                value=config.model_config.default_batch_size,
+                                label="Batch",
+                                precision=0,
+                                interactive=False,
+                            )
+                        seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
 
-            # ── SECTION: OUTPUT ──────────────────────────────────────────
-            gr.HTML(
-                "<div class='bv-section-sep' id='bv-out'>"
-                "<div class='bv-section-eyebrow'>Result</div>"
-                "<div class='bv-section-heading'>Output</div>"
-                "<div class='bv-section-rule'></div>"
-                "</div>"
-            )
+                # ── SECTION: OUTPUT ──────────────────────────────────────
+                gr.HTML(
+                    "<div class='bv-section-sep' id='bv-out'>"
+                    "<div class='bv-section-eyebrow'>Result</div>"
+                    "<div class='bv-section-heading'>Output</div>"
+                    "<div class='bv-section-rule'></div>"
+                    "</div>"
+                )
 
-            with gr.Row(equal_height=False):
-                with gr.Column(scale=3, elem_classes=["bv-output-card"]):
-                    image_output = gr.Image(
-                        type="pil",
-                        label="Generated Image",
-                        height=512,
-                        elem_id="bv-generated-image",
-                    )
-                with gr.Column(scale=2, elem_classes=["bv-info-card"]):
-                    info_text = gr.Textbox(
-                        label="Generation Info",
-                        interactive=False,
-                        lines=7,
-                    )
+                with gr.Row(equal_height=False):
+                    with gr.Column(scale=3, elem_classes=["bv-output-card"]):
+                        image_output = gr.Image(
+                            type="pil",
+                            label="Generated Image",
+                            height=512,
+                            elem_id="bv-generated-image",
+                        )
+                    with gr.Column(scale=2, elem_classes=["bv-info-card"]):
+                        info_text = gr.Textbox(
+                            label="Generation Info",
+                            interactive=False,
+                            lines=7,
+                        )
 
-            with gr.Row(equal_height=False):
-                with gr.Column(elem_classes=["bv-output-card"]):
-                    history_gallery = gr.Gallery(
-                        value=self._load_history_gallery(),
-                        label="Recent Generations",
-                        columns=4,
-                        rows=2,
-                        height=360,
-                        object_fit="contain",
-                    )
-                    refresh_history_btn = gr.Button("↻ Refresh History", size="sm")
+                with gr.Row(equal_height=False):
+                    with gr.Column(elem_classes=["bv-output-card"]):
+                        history_gallery = gr.Gallery(
+                            value=self._load_history_gallery(),
+                            label="Recent Generations",
+                            columns=4,
+                            rows=2,
+                            height=360,
+                            object_fit="contain",
+                        )
+                        refresh_history_btn = gr.Button("↻ Refresh History", size="sm")
 
             with gr.Group(visible=False) as face_reference_panel:
                 gr.HTML(
@@ -1163,7 +1240,7 @@ class ButterVisionUI:
                         )
                         face_prompt = gr.Textbox(
                             label="Prompt",
-                            placeholder="Describe the image while InstantID preserves the reference identity…",
+                            placeholder="Describe the image while IP-Adapter preserves the reference identity…",
                             lines=4,
                         )
                         face_negative_prompt = gr.Textbox(
@@ -1183,7 +1260,7 @@ class ButterVisionUI:
                         face_steps = gr.Slider(
                             minimum=1,
                             maximum=60,
-                            value=15,
+                            value=config.model_config.face_default_steps,
                             step=1,
                             label="Steps",
                         )
@@ -1194,26 +1271,23 @@ class ButterVisionUI:
                             step=0.5,
                             label="CFG Scale",
                         )
-                        face_width = gr.Slider(
-                            minimum=512,
-                            maximum=768,
-                            value=512,
-                            step=64,
+                        face_width = gr.Number(
+                            value=config.model_config.face_default_width,
                             label="Width",
+                            precision=0,
+                            interactive=False,
                         )
-                        face_height = gr.Slider(
-                            minimum=512,
-                            maximum=768,
-                            value=512,
-                            step=64,
+                        face_height = gr.Number(
+                            value=config.model_config.face_default_height,
                             label="Height",
+                            precision=0,
+                            interactive=False,
                         )
-                        face_batch_size = gr.Slider(
-                            minimum=1,
-                            maximum=1,
+                        face_batch_size = gr.Number(
                             value=1,
-                            step=1,
                             label="Batch",
+                            precision=0,
+                            interactive=False,
                         )
                         face_seed = gr.Number(value=-1, label="Seed  (−1 = random)", precision=0)
 
@@ -1273,7 +1347,7 @@ class ButterVisionUI:
             function_selector.change(
                 fn=self.switch_function,
                 inputs=[function_selector],
-                outputs=[face_reference_panel, face_info_text],
+                outputs=[text_to_image_panel, face_reference_panel, face_info_text],
             )
 
             generate_btn.click(
@@ -1303,6 +1377,11 @@ class ButterVisionUI:
             image_output.change(
                 fn=None,
                 inputs=[image_output],
+                js="(url) => { if (url && window.openBVModal) window.openBVModal(url); }"
+            )
+            face_image_output.change(
+                fn=None,
+                inputs=[face_image_output],
                 js="(url) => { if (url && window.openBVModal) window.openBVModal(url); }"
             )
 

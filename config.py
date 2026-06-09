@@ -26,6 +26,10 @@ for directory in [MODELS_DIR, SD_MODELS_DIR, LORA_DIR, CONTROLNET_DIR, EMBEDDING
 @dataclass
 class ModelConfig:
     """Configuración del modelo Stable Diffusion"""
+    # Perfil inicial: GTX 1650 / 4GB VRAM. ButterVision arranca en low VRAM
+    # para todas las herramientas y luego puede escalarse desde CLI/config.
+    hardware_profile: str = "gtx1650_lowvram"
+
     # Modelo base por defecto. ButterVision lo descarga en el primer arranque si falta.
     model_id: str = "cyberrealistic_final"
     default_model_filename: str = "cyberrealistic_final.safetensors"
@@ -35,18 +39,32 @@ class ModelConfig:
     # "runwayml/stable-diffusion-v1-5"
     
     # Optimizaciones de memoria
-    use_fp16: bool = False  # DESACTIVADO para GTX 1650 (evita type mismatches)
-    enable_xformers: bool = False  # xformers DESACTIVADO para GTX 1650 (causa NaNs)
+    use_fp16: bool = False  # GTX 1650: float32 evita NaNs/type mismatches
+    enable_xformers: bool = False  # GTX 1650: desactivado por estabilidad
     enable_attention_slicing: bool = True  # Divide attention en chunks
     enable_vae_slicing: bool = True  # Procesa VAE en batches
     enable_cpu_offload: bool = True  # Offload a CPU (más lento pero ahorra VRAM)
     
     # Parámetros por defecto de generación
-    default_steps: int = 30
+    default_steps: int = 20
     default_cfg_scale: float = 5.0  # Reducido para estabilidad en GTX 1650
     default_width: int = 512
     default_height: int = 512
+    default_batch_size: int = 1
+    max_batch_size: int = 1
+    max_width: int = 512
+    max_height: int = 512
     default_scheduler: str = "DDIMScheduler"  # Más estable en GTX 1650
+
+    # Face Reference / SD1.5 IP-Adapter defaults para GTX 1650.
+    face_use_fp16: bool = True  # SD1.5 IP-Adapter necesita fp16 + offload para 4GB VRAM.
+    face_enable_cpu_offload: bool = True
+    face_det_size: int = 320
+    face_default_steps: int = 12
+    face_default_width: int = 512
+    face_default_height: int = 512
+    face_max_width: int = 512
+    face_max_height: int = 512
     
     # Seguridad
     safety_checker: bool = False  # Desactivado por defecto (ahorra VRAM)

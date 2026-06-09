@@ -10,4 +10,12 @@ if [ ! -d "venv" ]; then
 fi
 
 source venv/bin/activate
+
+VENV_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+for nvidia_lib_dir in "$VENV_SITE"/nvidia/*/lib; do
+    if [ -d "$nvidia_lib_dir" ]; then
+        export LD_LIBRARY_PATH="$nvidia_lib_dir:${LD_LIBRARY_PATH:-}"
+    fi
+done
+
 python main.py "$@"

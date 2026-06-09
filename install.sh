@@ -1,11 +1,11 @@
 #!/bin/bash
 # Script de instalación rápida para ButterVision
-# Uso: bash install.sh [cuda118|cuda121|cpu] [--instantid]
+# Uso: bash install.sh [cuda121|cuda118|cpu] [--no-instantid]
 
 set -e
 
-CUDA_VERSION=${1:-cuda118}
-INSTALL_INSTANTID=${2:-}
+CUDA_VERSION=${1:-cuda121}
+INSTALL_INSTANTID=${2:---instantid}
 
 echo "🎨 ButterVision - Script de instalación"
 echo "========================================"
@@ -22,10 +22,10 @@ fi
 
 echo "Sistema operativo: $OS"
 echo "Versión CUDA: $CUDA_VERSION"
-if [[ "$INSTALL_INSTANTID" == "--instantid" ]]; then
+if [[ "$INSTALL_INSTANTID" != "--no-instantid" ]]; then
     echo "Face Reference / InstantID: incluido"
 else
-    echo "Face Reference / InstantID: opcional"
+    echo "Face Reference / InstantID: omitido"
 fi
 echo ""
 
@@ -52,6 +52,13 @@ fi
 echo ""
 echo "🔧 Activando entorno virtual..."
 source venv/bin/activate
+
+VENV_SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+for nvidia_lib_dir in "$VENV_SITE"/nvidia/*/lib; do
+    if [ -d "$nvidia_lib_dir" ]; then
+        export LD_LIBRARY_PATH="$nvidia_lib_dir:${LD_LIBRARY_PATH:-}"
+    fi
+done
 
 # Actualizar pip
 echo ""
@@ -86,10 +93,12 @@ echo ""
 echo "📚 Instalando dependencias..."
 pip install -r requirements.txt
 
-if [[ "$INSTALL_INSTANTID" == "--instantid" ]]; then
+if [[ "$INSTALL_INSTANTID" != "--no-instantid" ]]; then
     echo ""
     echo "🧑 Instalando dependencias opcionales de Face Reference / InstantID..."
     pip install -r requirements-instantid.txt
+    pip install onnxruntime==1.23.2
+    pip install --force-reinstall --no-deps onnxruntime-gpu==1.23.2
 fi
 
 # Instalar xformers (opcional pero recomendado)
@@ -115,6 +124,9 @@ chmod +x install_face_reference.sh
 echo ""
 echo "🔍 Verificando instalación..."
 python3 -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA disponible: {torch.cuda.is_available()}')"
+if [[ "$INSTALL_INSTANTID" != "--no-instantid" ]]; then
+    python3 -c "import onnxruntime as ort; print('ONNXRuntime providers:', ort.get_available_providers())"
+fi
 
 echo ""
 echo "✅ ¡Instalación completada!"
@@ -126,6 +138,6 @@ echo "Opciones útiles:"
 echo "  ./run.sh --port 7861"
 echo "  ./run.sh --share"
 echo "  ./run.sh --skip-model-download"
-echo "  ./install_face_reference.sh  # habilitar Face Reference / InstantID"
+echo "  bash install.sh cuda121 --no-instantid  # instalación mínima sin Face Reference"
 echo ""
 echo "Para más información: cat README.md"

@@ -1,0 +1,7 @@
+Prompt: mujer en la ventana
+Negative Prompt: 
+Seed: 4217677985
+Model: stabilityai/stable-diffusion-xl-base-1.0
+Size: 512x512
+Steps: 15 | CFG: 5.0
+Batch: 1
