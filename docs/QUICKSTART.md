@@ -15,26 +15,13 @@ bash install.sh cuda118    # Para CUDA 11.8
 # O en Windows: run.bat
 ```
 
-## Comandos esenciales
+La interfaz principal abre React en `http://127.0.0.1:5173` y usa FastAPI en `127.0.0.1:7861`.
+
+## Interfaz Gradio anterior
 
 ```bash
-# Inicio básico
-./run.sh
-
-# GPU con 4GB VRAM
-./run.sh --lowvram
-
-# GPU con 6GB VRAM
-./run.sh --medvram
-
-# Compartir públicamente
-./run.sh --share
-
-# Con autenticación
-./run.sh --auth usuario:password --share
-
-# Modelo diferente
-./run.sh --model "stabilityai/stable-diffusion-2-1"
+./run_gradio.sh
+# Windows: run_gradio.bat
 ```
 
 ## Estructura rápida
@@ -60,11 +47,11 @@ buttervision/
 
 ## Flujo típico
 
-1. **Lanzar React + FastAPI**: `./run_ux.sh`
+1. **Lanzar React + FastAPI**: `./run.sh`
 2. **Abrir React**: http://127.0.0.1:5173
-3. **Gradio heredado** (opcional): `./run.sh` en http://127.0.0.1:7860
-3. **Prompt**: "a beautiful landscape, oil painting"
-4. **Generate** → Esperar → ¡Listo!
+3. **Gradio heredado** (opcional): `./run_gradio.sh` en http://127.0.0.1:7860
+4. **Prompt**: "a beautiful landscape, oil painting"
+5. **Generate** → Esperar → ¡Listo!
 
 ## Tips rápidos
 
@@ -88,7 +75,7 @@ buttervision/
 
 | Problema | Solución |
 |----------|----------|
-| Out of memory | `./run.sh --lowvram` |
+| Out of memory en Gradio | `./run_gradio.sh --lowvram` |
 | Muy lento | Instalar xformers: `pip install xformers` |
 | No encuentra GPU | Reinstalar PyTorch con CUDA |
 | Modelo no descarga | Configurar `CIVITAI_API_TOKEN` o colocar el `.safetensors` manualmente |

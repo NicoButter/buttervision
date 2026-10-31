@@ -56,8 +56,9 @@ buttervision/
 ├── outputs/             # Imágenes generadas
 ├── requirements.txt     # Dependencias
 ├── setup.sh            # Script de instalación
-├── run.bat             # Lanzador Windows
-└── run.sh              # Script de ejecución
+├── run.bat             # Inicio principal en Windows
+├── run.sh              # Inicio principal: React + FastAPI
+└── run_gradio.sh       # Interfaz Gradio anterior
 ```
 
 ## 🎯 Funcionalidad Disponible
@@ -66,22 +67,22 @@ Por ahora ButterVision expone solo **Text to Image**. El resto de módulos se ag
 
 ## 🚀 Lanzadores locales
 
-Para iniciar la interfaz React y FastAPI juntos en `127.0.0.1:5173` y `127.0.0.1:7861`:
+El comando principal inicia React y FastAPI juntos en `127.0.0.1:5173` y `127.0.0.1:7861`:
 
 Linux/Mac:
-
-```bash
-./run_ux.sh
-```
-
-Gradio continúa disponible por separado en `127.0.0.1:7860`:
 
 ```bash
 ./run.sh
 ```
 
-Para iniciar los servicios por separado, usa `./run_api.sh` (7861) y `./run_web_dev.sh` (5173). No se enlazan a la red por defecto.
+Gradio continúa disponible por separado en `127.0.0.1:7860`:
 
-Windows: `run_ux.bat` abre React y FastAPI en terminales locales separadas; `run_api.bat` y `run_web_dev.bat` también pueden ejecutarse individualmente.
+```bash
+./run_gradio.sh
+```
+
+`run_api.sh` y `run_web_dev.sh` se conservan solo para iniciar componentes individualmente en tareas de desarrollo. No se enlazan a la red por defecto.
+
+Windows: `run.bat` inicia la interfaz principal y `run_gradio.bat` inicia Gradio. `run_api.bat` y `run_web_dev.bat` quedan disponibles para desarrollo.
 
 **Privacidad:** `/outputs` sirve imágenes sin autenticación; archivos nombrados `reference_face.png`, prompts y metadatos no se descargan por esa ruta. Las fotos faciales ya existentes se conservan localmente, pero quedan bloqueadas desde el servidor estático. No cambies los hosts a direcciones públicas en una red no confiable.

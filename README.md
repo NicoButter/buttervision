@@ -77,7 +77,16 @@ pip install xformers
 ./run.sh
 ```
 
-En el primer arranque, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors`, descargado desde el backup público de Hugging Face de CyberRealistic.
+Esto inicia la interfaz principal React en `http://127.0.0.1:5173` y FastAPI en `http://127.0.0.1:7861`. En Windows, usa `run.bat`.
+
+La interfaz Gradio anterior sigue disponible con `./run_gradio.sh` en `http://127.0.0.1:7860`. Sus opciones de servidor y VRAM se pasan a ese lanzador; por ejemplo:
+
+```bash
+./run_gradio.sh --lowvram
+./run_gradio.sh --share
+```
+
+Al usar Gradio, ButterVision verifica el modelo base configurado y lo descarga automáticamente si no está disponible localmente. Por defecto usa `cyberrealistic_final.safetensors`, descargado desde el backup público de Hugging Face de CyberRealistic.
 
 Durante la descarga verás progreso en la terminal con porcentaje, tamaño descargado, tamaño total, velocidad y ETA. Si la descarga se interrumpe, ButterVision intenta reanudar el archivo `.part` en el siguiente arranque.
 
@@ -85,7 +94,7 @@ La página de CivitAI puede pedir autenticación, por eso el launcher usa Huggin
 
 ```bash
 export CIVITAI_API_TOKEN="tu_token"
-./run.sh
+./run_gradio.sh
 ```
 
 También puedes descargarlo manualmente y colocarlo en:
@@ -94,15 +103,7 @@ También puedes descargarlo manualmente y colocarlo en:
 models/stable-diffusion/cyberrealistic_final.safetensors
 ```
 
-Por defecto, Gradio escucha únicamente en `127.0.0.1:7860`. Para iniciar React y FastAPI juntos en sus puertos locales:
-
-```bash
-./run_ux.sh
-```
-
-Abre `http://127.0.0.1:5173`. FastAPI queda en `http://127.0.0.1:7861`. La interfaz Gradio de compatibilidad se inicia por separado con `./run.sh` en `http://127.0.0.1:7860`. Los lanzadores individuales `run_api.sh` y `run_web_dev.sh` usan los mismos puertos locales. En Windows, usa `run_ux.bat` para abrir React y FastAPI en terminales separadas, o inicia `run_api.bat` y `run_web_dev.bat` manualmente.
-
-En Windows, `run.bat` mantiene la interfaz Gradio en `127.0.0.1:7860`.
+`run.sh` es el único lanzador principal para React + FastAPI. `run_api.sh` y `run_web_dev.sh` se conservan para desarrollo y diagnóstico. En Windows, `run.bat` inicia la interfaz principal y `run_gradio.bat` inicia la interfaz anterior.
 
 **Privacidad y seguridad:** los lanzadores enlazan a loopback. `/outputs` sigue sirviendo imágenes generadas sin autenticación; los archivos de referencia existentes quedan en disco, pero las rutas conocidas de referencias, prompts y metadatos ya no se sirven por esa ruta. Las nuevas referencias no se guardan en `outputs/`. Protege la máquina local y no cambies el host a una interfaz pública: no hay autenticación, control de acceso por archivo ni retención automatizada.
 
@@ -120,13 +121,13 @@ run.bat
 
 ```bash
 # Cambiar puerto de Gradio (por defecto 7860)
-./run.sh --port 7862
+./run_gradio.sh --port 7862
 
 # Crear share link público (Gradio)
-./run.sh --share
+./run_gradio.sh --share
 
 # Añadir autenticación
-./run.sh --auth usuario:contraseña
+./run_gradio.sh --auth usuario:contraseña
 
 ```
 
@@ -134,45 +135,45 @@ run.bat
 
 ```bash
 # GPU de 4GB (GTX 1650) - slicing + CPU offload, sin xformers/fp16 por defecto
-./run.sh --lowvram
+./run_gradio.sh --lowvram
 
 # GPU con VRAM media (6GB+) - fp16/xformers si tu GPU los tolera bien
-./run.sh --medvram
+./run_gradio.sh --medvram
 
 # Desactivar todas las optimizaciones (para debugging)
-./run.sh --no-optimizations
+./run_gradio.sh --no-optimizations
 ```
 
 #### Configuración del modelo
 
 ```bash
 # Usar un modelo diferente
-./run.sh --model "stabilityai/stable-diffusion-2-1"
+./run_gradio.sh --model "stabilityai/stable-diffusion-2-1"
 
 # Modo offline estricto: no descargar modelos al arrancar
-./run.sh --skip-model-download
+./run_gradio.sh --skip-model-download
 
 # Desactivar float16 (usa más VRAM)
-./run.sh --no-fp16
+./run_gradio.sh --no-fp16
 
 # Desactivar xformers
-./run.sh --no-xformers
+./run_gradio.sh --no-xformers
 ```
 
 #### Combinaciones útiles
 
 ```bash
 # Para GPU de 4GB (ej: GTX 1650)
-./run.sh --lowvram --share
+./run_gradio.sh --lowvram --share
 
 # Para GPU de 6GB (ej: RTX 3060)
-./run.sh --medvram
+./run_gradio.sh --medvram
 
 # Para GPU de 8GB+ (ej: RTX 3070)
-./run.sh
+./run_gradio.sh
 
 # Usar modelo SD 2.1 con optimizaciones
-./run.sh --model "stabilityai/stable-diffusion-2-1" --medvram
+./run_gradio.sh --model "stabilityai/stable-diffusion-2-1" --medvram
 ```
 
 ## 📁 Estructura del proyecto
@@ -219,7 +220,7 @@ La API local implementada ofrece `POST /api/generate/txt2img`, `POST /api/genera
 
 ### Gradio (compatibilidad y diagnóstico)
 
-La interfaz Gradio previa sigue disponible con `./run.sh` en `http://127.0.0.1:7860`. Sus controles y capacidades no son la interfaz principal de React.
+La interfaz Gradio previa sigue disponible con `./run_gradio.sh` en `http://127.0.0.1:7860`. Sus controles y capacidades no son la interfaz principal de React.
 
 #### Text-to-Image en Gradio
 
@@ -365,7 +366,7 @@ Crea scripts Python en la carpeta `extensions/` para añadir funcionalidades per
 
 ```bash
 # Prueba con optimizaciones más agresivas
-./run.sh --lowvram
+./run_gradio.sh --lowvram
 
 # O reduce la resolución de generación
 # Usa 384x384 o 448x448 en lugar de 512x512
@@ -378,7 +379,7 @@ Crea scripts Python en la carpeta `extensions/` para añadir funcionalidades per
 pip install xformers
 
 # O desactívalo si da problemas
-./run.sh --no-xformers
+./run_gradio.sh --no-xformers
 ```
 
 ### El modelo se descarga muy lento

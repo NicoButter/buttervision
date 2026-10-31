@@ -40,27 +40,11 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}')" || { echo "❌ 
 python -c "import gradio; print(f'Gradio: {gradio.__version__}')" || { echo "❌ Error con Gradio"; exit 1; }
 python -c "import diffusers; print(f'Diffusers: {diffusers.__version__}')" || { echo "❌ Error con Diffusers"; exit 1; }
 
-# Actualizar script run.sh
-echo '#!/bin/bash
-set -e
-
-cd "$(dirname "$0")"
-
-if [ ! -d "venv" ]; then
-    echo "No existe el entorno virtual venv."
-    echo "Primero ejecuta: bash install.sh cuda121"
-    exit 1
-fi
-
-source venv/bin/activate
-python main.py "$@"' > run.sh
-chmod +x run.sh
-
 echo ""
 echo "🎉 ¡Configuración completada!"
 echo ""
 echo "Para ejecutar ButterVision:"
 echo "  ./run.sh"
 echo ""
-echo "Puedes pasar opciones al lanzador:"
-echo "  ./run_ux.sh  # React 5173 + FastAPI 7861; Gradio: ./run.sh (7860)"
+echo "Para iniciar la interfaz Gradio anterior:"
+echo "  ./run_gradio.sh"

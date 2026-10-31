@@ -1,5 +1,7 @@
 # Informe de estabilización — Buttervision UX v2.1
 
+> **Actualización del lanzador:** después de esta iteración, `./run.sh` quedó como el único punto de entrada principal para React + FastAPI. Gradio se inicia con `./run_gradio.sh`; `run_api.sh` y `run_web_dev.sh` son herramientas auxiliares para desarrollo. Las referencias a `run_ux.sh` en el historial describen el lanzador usado durante la validación original.
+
 ## A. Resumen
 
 Se estabilizó el arranque local de React y FastAPI, manteniendo Gradio como interfaz heredada. Los tres servicios tienen puertos fijos por defecto y escuchan en loopback: React `127.0.0.1:5173`, FastAPI `127.0.0.1:7861` y Gradio `127.0.0.1:7860`.
@@ -73,7 +75,7 @@ Se alinearon selector de orientación, resolución experta y límites de Face Re
 
 ## E. Archivos principales
 
-- Arranque: `run_ux.sh`, `run_ux.bat`, `run_api.sh`, `run_api.bat`, `run_web_dev.sh`, `run_web_dev.bat`.
+- Arranque actual: `run.sh`, `run.bat`, `run_gradio.sh`, `run_gradio.bat`; lanzadores individuales de desarrollo: `run_api.sh`, `run_api.bat`, `run_web_dev.sh`, `run_web_dev.bat`.
 - API y límites: `api/app.py`, `api/uploads.py`, `api/output_files.py`, `api/schemas.py`, `api/generation.py`, `config.py`.
 - Interfaz y pruebas: `web/vite.config.js`, `web/src/app/App.jsx`, `web/src/components/AdvancedSettings.jsx`, `web/src/components/MediaUploader.jsx`, `web/src/app/App.test.jsx`, `tests/test_ux_stabilization.py`.
 - Documentación: `README.md`, `docs/ARCHITECTURE.md`, `docs/README_SETUP.md`, `docs/EXAMPLES.md`, `docs/QUICKSTART.md` y este informe.

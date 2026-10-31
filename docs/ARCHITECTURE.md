@@ -8,7 +8,7 @@ La interfaz Gradio de `ui/interface.py` se conserva para compatibilidad y diagn�
 
 ## Flujo de React y API
 
-En desarrollo, `./run_ux.sh` inicia React en `http://127.0.0.1:5173` y FastAPI en `http://127.0.0.1:7861`; `./run.sh` conserva Gradio en `http://127.0.0.1:7860`. Cada servicio también tiene un lanzador individual. Los tres se enlazan a loopback por defecto. En producción local, `npm run build` crea `web/dist`; `api/app.py` entrega esos archivos cuando están presentes.
+`./run.sh` inicia React en `http://127.0.0.1:5173` y FastAPI en `http://127.0.0.1:7861`. `./run_gradio.sh` conserva la interfaz Gradio anterior en `http://127.0.0.1:7860`. Los lanzadores individuales de React y FastAPI se reservan para desarrollo. Los tres servicios se enlazan a loopback por defecto. En producción local, `npm run build` crea `web/dist`; `api/app.py` entrega esos archivos cuando están presentes.
 
 ```text
 React (web/src)

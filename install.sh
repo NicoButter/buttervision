@@ -118,6 +118,7 @@ mkdir -p outputs
 mkdir -p cache
 mkdir -p extensions
 chmod +x run.sh
+chmod +x run_gradio.sh
 chmod +x install_face_reference.sh
 
 # Verificar instalación
@@ -135,9 +136,8 @@ echo "Para iniciar ButterVision:"
 echo "  ./run.sh"
 echo ""
 echo "Opciones útiles:"
-echo "  ./run_ux.sh  # React 5173 + FastAPI 7861; Gradio: ./run.sh (7860)"
-echo "  ./run.sh --share"
-echo "  ./run.sh --skip-model-download"
+echo "  ./run_gradio.sh --share  # Gradio anterior, puerto 7860"
+echo "  ./run_gradio.sh --skip-model-download"
 echo "  bash install.sh cuda121 --no-instantid  # instalación mínima sin Face Reference"
 echo ""
 echo "Para más información: cat README.md"

@@ -96,8 +96,8 @@ echo Para iniciar ButterVision:
 echo   run.bat
 echo.
 echo Opciones utiles:
-echo   run.bat  (Gradio en 127.0.0.1:7860)
-echo   run.bat --share
-echo   run.bat --skip-model-download
+echo   run_gradio.bat  (interfaz Gradio anterior)
+echo   run_gradio.bat --share
+echo   run_gradio.bat --skip-model-download
 echo.
 pause
