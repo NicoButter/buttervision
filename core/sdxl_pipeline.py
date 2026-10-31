@@ -1,5 +1,6 @@
 """Independent local SDXL backend; designed for offload, not validated on 4 GB."""
 import os
+import tempfile
 from pathlib import Path
 
 import psutil
@@ -7,15 +8,14 @@ import torch
 from huggingface_hub import try_to_load_from_cache
 from huggingface_hub.constants import HF_HUB_CACHE
 from diffusers import StableDiffusionXLPipeline
-from diffusers.utils import is_accelerate_available
 
 import config
 from core.engine_memory import lifecycle, measured_phase, release_owned
 from core.prompt_limits import limit_prompts
+from core.sdxl_memory import plan_strategy, collect_resources, _cgroup_memory
 
 _GIB = 1024**3
 _LOW_CPU_MEM_SAFETY_BYTES = 2 * _GIB
-_SEQUENTIAL_OFFLOAD_MIN_VRAM_BYTES = 1536 * 1024**2
 
 
 def local_sdxl_config(checkpoint):
@@ -38,13 +38,9 @@ def local_sdxl_config(checkpoint):
 
 def available_ram():
     available = psutil.virtual_memory().available
-    try:
-        limit = Path("/sys/fs/cgroup/memory.max").read_text().strip()
-        used = int(Path("/sys/fs/cgroup/memory.current").read_text())
-        if limit != "max":
-            available = min(available, max(0, int(limit) - used))
-    except (OSError, ValueError):
-        pass
+    _, _, cgroup_available = _cgroup_memory()
+    if cgroup_available is not None:
+        available = min(available, cgroup_available)
     return available
 
 
@@ -58,67 +54,44 @@ def _weight_bytes(model):
         raise ValueError("No se pueden leer los pesos SDXL locales.") from error
 
 
-def inspect_load_budget(model):
+def inspect_load_budget(model, requested="AUTO", *, allow_experimental_disk=False):
     size = _weight_bytes(model)
     if not size:
         raise ValueError("No se encontraron pesos safetensors locales para SDXL.")
-    accelerate = bool(is_accelerate_available())
-    ram = available_ram()
-    cuda = torch.cuda.is_available()
-    # The current CPU fallback uses FP32, which can roughly double an FP16
-    # checkpoint's in-memory parameter size even with low-memory initialization.
-    ram_weight_multiplier = 1 if cuda else 2
-    required_ram = size * ram_weight_multiplier + _LOW_CPU_MEM_SAFETY_BYTES
-    free_vram = None
-    required_vram = None
-    if cuda:
-        try:
-            free_vram = torch.cuda.mem_get_info()[0]
-        except Exception:
-            free_vram = None
-        required_vram = (_SEQUENTIAL_OFFLOAD_MIN_VRAM_BYTES if config.model_config.enable_cpu_offload
-                         else size + _LOW_CPU_MEM_SAFETY_BYTES)
-    reasons = []
-    if not accelerate:
-        reasons.append("Accelerate no está instalado; la carga de bajo uso de RAM no está disponible")
-    if ram < required_ram:
-        reasons.append("RAM libre insuficiente para carga progresiva de pesos con margen")
-    if cuda and free_vram is None:
-        reasons.append("No se pudo medir la VRAM disponible para SDXL")
-    elif cuda and free_vram < required_vram:
-        reasons.append("VRAM libre insuficiente para la configuración de offload actual")
-    return {
-        "strategy": "diffusers_low_cpu_mem_usage_sequential_cpu_offload" if cuda and config.model_config.enable_cpu_offload
-                   else "diffusers_low_cpu_mem_usage",
-        "checkpoint_bytes": size,
-        "available_ram_bytes": ram,
-        "estimated_required_ram_bytes": required_ram,
-        "ram_weight_multiplier": ram_weight_multiplier,
+    resources = collect_resources()
+    resources["ram_available_bytes"] = available_ram()
+    assessment = plan_strategy(size, resources, requested, allow_experimental_disk=allow_experimental_disk)
+    assessment.update({
+        "strategy": assessment["selected_profile"],
+        "estimated_required_ram_bytes": assessment["ram_low_required_bytes"],
         "ram_safety_margin_bytes": _LOW_CPU_MEM_SAFETY_BYTES,
-        "low_cpu_mem_usage_available": accelerate,
-        "cuda_available": cuda,
-        "cpu_offload_enabled": bool(cuda and config.model_config.enable_cpu_offload),
-        "available_vram_bytes": free_vram,
-        "required_vram_bytes": required_vram,
-        "admitted": not reasons,
-        "reasons": reasons,
-    }
+        "low_cpu_mem_usage_available": assessment["capabilities"]["low_cpu_mem_usage"],
+        "cuda_available": resources["cuda_available"],
+        "available_vram_bytes": resources["vram_available_bytes"],
+        "required_vram_bytes": (assessment["vram_low_required_bytes"] if assessment["cpu_offload_enabled"]
+                                 else assessment["vram_standard_required_bytes"]),
+    })
+    return assessment
 
 
-def check_budget(model):
-    assessment = inspect_load_budget(model)
+def check_budget(model, requested="AUTO", *, allow_experimental_disk=False):
+    assessment = inspect_load_budget(model, requested, allow_experimental_disk=allow_experimental_disk)
     if not assessment["admitted"]:
-        raise ValueError("; ".join(assessment["reasons"]))
+        raise ValueError("; ".join(assessment["reasons"]) or "Ningún perfil de memoria SDXL es viable con los recursos actuales.")
     return assessment
 
 
 class SDXLPipeline:
-    def __init__(self, model_id):
+    def __init__(self, model_id, requested_strategy="AUTO", allow_experimental_disk=False):
         self.model_id = model_id
+        self.requested_strategy = str(requested_strategy or "AUTO").upper()
+        self.allow_experimental_disk = bool(allow_experimental_disk)
         self.pipe = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.load_state = "selected"
         self.load_error = ""
+        self.load_plan = None
+        self._disk_offload_temp = None
 
     def load_pipeline(self):
         if self.pipe is not None:
@@ -131,6 +104,9 @@ class SDXLPipeline:
         except Exception as error:
             self.load_state = "error"
             self.load_error = type(error).__name__
+            if self.load_plan is not None:
+                self.load_plan["load_phase"] = "error"
+                self.load_plan["reasons"] = [type(error).__name__]
             if self.pipe is not None:
                 try:
                     self.cleanup()
@@ -141,28 +117,42 @@ class SDXLPipeline:
 
     @lifecycle("sdxl", "load")
     def _build_pipeline(self):
-        check_budget(self.model_id)
+        plan = check_budget(self.model_id, requested=self.requested_strategy,
+                            allow_experimental_disk=self.allow_experimental_disk)
+        self.load_plan = plan
+        self.load_plan["load_phase"] = "loading"
         dtype = torch.float16 if self.device == "cuda" else torch.float32
+        low_cpu = plan["selected_profile"] != "STANDARD"
         source = Path(self.model_id)
         if source.is_file():
             pipe = StableDiffusionXLPipeline.from_single_file(
                 str(source), config=local_sdxl_config(source), torch_dtype=dtype,
-                local_files_only=True, low_cpu_mem_usage=True,
+                local_files_only=True, low_cpu_mem_usage=low_cpu, disable_mmap=False,
             )
         else:
             pipe = StableDiffusionXLPipeline.from_pretrained(
                 str(source), torch_dtype=dtype, local_files_only=True,
-                use_safetensors=True, low_cpu_mem_usage=True,
+                use_safetensors=True, low_cpu_mem_usage=low_cpu,
             )
         self.pipe = pipe
         pipe.enable_attention_slicing("max")
         pipe.enable_vae_slicing()
         pipe.enable_vae_tiling()
-        if self.device == "cuda" and config.model_config.enable_cpu_offload:
+        if plan["selected_profile"] == "DISK_OFFLOAD":
+            target = Path(os.environ["BUTTERVISION_SDXL_DISK_OFFLOAD_DIR"]).expanduser().resolve()
+            target.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self._disk_offload_temp = tempfile.TemporaryDirectory(prefix="buttervision-sdxl-", dir=target)
+            pipe.enable_group_offload(
+                onload_device=torch.device("cuda"), offload_device=torch.device("cpu"),
+                offload_type="block_level", num_blocks_per_group=1,
+                offload_to_disk_path=self._disk_offload_temp.name,
+            )
+        elif plan["cpu_offload_enabled"]:
             pipe.enable_sequential_cpu_offload()
         else:
             pipe.to(self.device)
         self.load_state = "loaded"
+        self.load_plan["load_phase"] = "loaded"
         self.load_error = ""
         return pipe
 
@@ -180,6 +170,11 @@ class SDXLPipeline:
 
     @lifecycle("sdxl", "release")
     def cleanup(self):
-        release_owned(self, ("pipe",))
-        if self.load_state != "error":
-            self.load_state = "selected"
+        try:
+            release_owned(self, ("pipe",))
+        finally:
+            disk_temp, self._disk_offload_temp = self._disk_offload_temp, None
+            if disk_temp is not None:
+                disk_temp.cleanup()
+            if self.load_state != "error":
+                self.load_state = "selected"

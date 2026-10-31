@@ -76,18 +76,19 @@ describe("Buttervision UX", () => {
       loras: [{ label: "Retrato", value: "lora", family: "sd15", active: true, compatible: true, weight: 0.8 }],
     });
     await openImageCreation();
+    fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
     await screen.findByText(/LoRA activos \(1\)/);
     expect(screen.getByText(/Modelo: CyberRealistic/)).toBeTruthy();
     expect(screen.getByText(/Familia: SD 1.5 · Estado del modelo: Seleccionado · pendiente de carga/)).toBeTruthy();
-    expect(screen.getByText(/Retrato/)).toBeTruthy();
+    expect(screen.getAllByText(/Retrato/).length).toBeGreaterThan(0);
   });
 
   it("muestra el selector de modelo en modo simple y avisa cuando solo hay un registrado", async () => {
     installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
     await openImageCreation();
     expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
-    expect(screen.getByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeTruthy();
-    expect(screen.getByText(/Se cargará al iniciar una generación; aún no está listo/)).toBeTruthy();
+    expect(screen.getByText("Estado: Seleccionado")).toBeTruthy();
+    expect(screen.queryByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeNull();
   });
 
   it("muestra cada estado del checkpoint sin llamar listo al seleccionado", async () => {
@@ -103,8 +104,23 @@ describe("Buttervision UX", () => {
         engine: { model: "Juggernaut XL", family: "sdxl", status: "idle", model_state: state },
       });
       await openImageCreation();
+      const expertToggle = screen.getByRole("button", { name: /Modo experto/ });
+      if (expertToggle.getAttribute("aria-pressed") !== "true") fireEvent.click(expertToggle);
       expect(screen.getAllByText(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).length).toBeGreaterThan(0);
     }
+  });
+
+  it("muestra el presupuesto y los offloads solo en modo experto", async () => {
+    installApiMock({
+      models: [{ label: "Juggernaut XL", value: "xl", family: "sdxl", active: true, state: "error" }],
+      engine: { model: "Juggernaut XL", family: "sdxl", status: "idle", model_state: "error", model_error: "ValueError", memory_strategy: "LOW_RAM", load_budget: { requested_profile: "AUTO", selected_profile: "LOW_RAM", ram_available_bytes: 8 * 1024 ** 3, ram_low_required_bytes: 9 * 1024 ** 3, vram_available_bytes: 1.8 * 1024 ** 3, cpu_offload_enabled: true, disk_offload_enabled: false, load_phase: "rejected", reasons: ["No hay margen suficiente"] } },
+    });
+    await openImageCreation();
+    expect(screen.queryByText(/Estrategia: LOW_RAM/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
+    expect(screen.getByText(/Estrategia: LOW_RAM/)).toBeTruthy();
+    expect(screen.getByText(/RAM: 8.00 GiB disponible/)).toBeTruthy();
+    expect(screen.getByText(/No hay margen suficiente/)).toBeTruthy();
   });
 
   it("actualiza el catálogo desde el endpoint registrado", async () => {
@@ -155,7 +171,7 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "xl" } });
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "El motor está ocupado. Espera a que termine la generación para cambiar de modelo.");
-    expect(screen.getByText("CyberRealistic")).toBeTruthy();
+    expect(screen.getByText("CyberRealistic", { selector: "strong" })).toBeTruthy();
   });
 
   it("permite volver de SDXL a SD 1.5 y bloquea familias desconocidas", async () => {
@@ -167,6 +183,7 @@ describe("Buttervision UX", () => {
     const changed = models.map((model) => ({ ...model, active: model.value === "cyber" }));
     installApiMock({ models, engine: { model: "Juggernaut XL v9", family: "sdxl", status: "idle" }, changedModels: changed });
     await openImageCreation();
+    fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
     expect(screen.getByRole("option", { name: /Checkpoint sin identificar/ }).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "cyber" } });
     await waitFor(() => expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber"));

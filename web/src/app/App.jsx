@@ -44,6 +44,11 @@ function modelStateLabel(state) {
   return MODEL_STATE_LABELS[state] || "Seleccionado · pendiente de carga";
 }
 
+function formatGiB(bytes) {
+  if (bytes == null) return "No disponible";
+  return `${(bytes / (1024 ** 3)).toFixed(2)} GiB`;
+}
+
 const TOOLS = [
   { id: "create-image", icon: "✦", title: "Crear imagen", description: "Imagina algo y conviértelo en una imagen." },
   { id: "create-video", icon: "▶", title: "Crear video", description: "Prepara una idea para darle movimiento." },
@@ -89,6 +94,15 @@ function CreateImagePage({
       Number(form.width) > Number(form.height) ? "landscape" : "portrait";
   const result = job?.result_images?.[0];
   const modelState = engine?.model_state || activeModel?.state || "selected";
+  const expert = mode === "expert";
+  const loadBudget = engine?.load_budget;
+  const cgroupRamAvailable = loadBudget?.ram_cgroup_limit_bytes == null ? null :
+    Math.max(0, loadBudget.ram_cgroup_limit_bytes - (loadBudget.ram_cgroup_current_bytes || 0));
+  const vramEstimate = loadBudget?.cpu_offload_enabled ? loadBudget?.vram_low_required_bytes : loadBudget?.vram_standard_required_bytes;
+  const simpleModelState = modelState === "loading" ? "Preparando modelo" :
+    modelState === "generating" ? "Generando" : modelState === "loaded" ? "Cargado · generación aún no validada" :
+      modelState === "error" ? `Error${engine?.model_error ? ` · ${engine.model_error}` : ""}` :
+        modelState === "incompatible" ? "Incompatible" : "Seleccionado";
 
   function chooseFormat(nextFormat) {
     const [width, height] = dimensions[nextFormat];
@@ -108,13 +122,23 @@ function CreateImagePage({
         <div className="form-card">
           <div className="notice" aria-live="polite">
             <strong>Modelo: {engine?.model || activeModel?.label || "No disponible"}</strong>
-            <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Estado del modelo: {modelStateLabel(modelState)}</p>
-            <p>Motor: {busy ? "Ocupado" : "Inactivo"}</p>
-            {engine?.model_error && modelState === "error" && <p role="status">La carga o generación falló ({engine.model_error}). Puedes volver a intentar; el motor libera los recursos parciales.</p>}
-            <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
-            {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
+            {!expert ? <p>Estado: {simpleModelState}</p> : <>
+              <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Estado del modelo: {modelStateLabel(modelState)}</p>
+              <p>Motor: {busy ? "Ocupado" : "Inactivo"}</p>
+              <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
+              {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
+              {loadBudget && <section className="notice" aria-label="Diagnóstico de memoria SDXL">
+                <strong>Estrategia: {loadBudget.selected_profile || "Sin estrategia viable"} · solicitada: {loadBudget.requested_profile || "AUTO"}</strong>
+                <p>RAM: {formatGiB(loadBudget.ram_available_bytes)} disponible · {formatGiB(loadBudget.ram_low_required_bytes)} estimada para carga de bajo uso · proceso {formatGiB(loadBudget.ram_process_rss_bytes)} RSS{cgroupRamAvailable == null ? "" : ` · cgroup ${formatGiB(cgroupRamAvailable)} libre`}.</p>
+                <p>VRAM: {formatGiB(loadBudget.vram_available_bytes)} disponible · {formatGiB(vramEstimate)} estimada · {loadBudget.cpu_offload_enabled ? "offload secuencial a CPU" : loadBudget.disk_offload_enabled ? "offload por grupos a disco" : "sin offload de inferencia"} · fase: {loadBudget.load_phase || "desconocida"}</p>
+                {loadBudget.disk_directory_configured && <p>Disco de offload local: {formatGiB(loadBudget.disk_available_bytes)} libres · {formatGiB(loadBudget.disk_required_bytes)} requeridos.</p>}
+                {loadBudget.disk_offload_enabled && <p>Offload a disco temporal activo; requiere validación experimental y se limpia al liberar el pipeline.</p>}
+                {loadBudget.reasons?.map((reason) => <p key={reason} role="status">{reason}</p>)}
+              </section>}
+              {engine?.model_error && modelState === "error" && <p role="status">La carga o generación falló ({engine.model_error}). Puedes volver a intentar; el motor libera los recursos parciales.</p>}
+            </>}
           </div>
-          <ModelSelector models={models} activeModel={activeModel} busy={busy} onChange={onModelChange} onRefresh={onRefresh} error={modelError} engine={engine} />
+          <ModelSelector models={models} activeModel={activeModel} busy={busy} onChange={onModelChange} onRefresh={onRefresh} error={modelError} engine={engine} expert={expert} />
           <label className="field">
             <span>¿Qué imagen quieres crear?</span>
             <textarea

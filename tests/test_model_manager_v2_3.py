@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import torch
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from safetensors.torch import save_file
 
 import api.app as api_app
@@ -19,6 +19,8 @@ import config
 from api.generation import EngineBusyError, GenerationJob, GenerationService
 from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
 from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
+from core.sdxl_memory import plan_strategy, _cgroup_memory
+from core.sdxl_memory import _disk_target
 from scripts.sdxl_isolated_probe import build_scope_command
 
 
@@ -38,6 +40,29 @@ def lora(path, family, metadata=None):
     dim = 2048 if family == SDXL else 768
     save_file({"lora_unet_down_blocks_0_attentions_0_transformer_blocks_0_attn2_to_k.lora_down.weight": torch.zeros((2, dim))},
               str(path), metadata=metadata)
+
+
+def memory_resources(*, ram=16, vram=4, cuda=True, accelerate=True, cpu_offload=True, disk_free=0,
+                     group_disk=True):
+    return {
+        "ram_total_bytes": 16 * 1024**3,
+        "ram_available_bytes": ram * 1024**3,
+        "process_rss_bytes": 512 * 1024**2,
+        "cgroup_limit_bytes": None,
+        "cgroup_current_bytes": None,
+        "cuda_available": cuda,
+        "vram_available_bytes": vram * 1024**3 if cuda else None,
+        "vram_total_bytes": 4 * 1024**3 if cuda else None,
+        "accelerate_available": accelerate,
+        "low_cpu_mem_usage_available": accelerate,
+        "safetensors_mmap_available": True,
+        "sequential_cpu_offload_available": accelerate,
+        "cpu_offload_configured": cpu_offload,
+        "group_disk_offload_api_available": group_disk,
+        "diffusers_version": "0.36.0",
+        "disk": {"configured": disk_free > 0, "path": "/tmp/buttervision-offload",
+                 "free_bytes": disk_free * 1024**3, "valid": disk_free > 0, "reason": ""},
+    }
 
 
 class OfflineFixture(unittest.TestCase):
@@ -64,6 +89,9 @@ class OfflineFixture(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         p = patch.object(config.model_config, "model_id", str(self.sd))
+        p.start()
+        self.addCleanup(p.stop)
+        p = patch.object(config, "CACHE_DIR", self.root / "cache")
         p.start()
         self.addCleanup(p.stop)
         for target in ("requests.sessions.Session.request", "core.model_manager.snapshot_download"):
@@ -210,10 +238,10 @@ class ManagerTests(OfflineFixture):
                 service.create_job("txt2img", {"prompt": "x", "width": 768, "height": 768})
         service.sd_manager.load_pipeline.assert_not_called()
         self.assertFalse(service.worker_lock.locked())
-        with patch.object(api_app, "get_service", return_value=service), patch.object(api_app, "validate_reference_image"):
-            response = TestClient(api_app.app).post("/api/generate/face-reference", json={"prompt": "x", "reference_image": "test"})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("SDXL", response.json()["detail"])
+        with self.assertRaises(HTTPException) as raised:
+            api_app.engine_call(service.create_job, "face_reference", {"prompt": "x"})
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("SDXL", raised.exception.detail)
 
     def test_sdxl_resolution_is_not_clamped_to_sd15(self):
         service = self.service()
@@ -299,9 +327,9 @@ class ManagerTests(OfflineFixture):
             for operation in (lambda: service.set_lora(str(self.one), True), lambda: service.set_model(str(self.xl)), lambda: service.create_job("txt2img", {})):
                 with self.assertRaises(EngineBusyError):
                     operation()
-            with patch.object(api_app, "get_service", return_value=service):
-                response = TestClient(api_app.app).post("/api/loras/active", json={"path": str(self.one), "enabled": True})
-            self.assertEqual(response.status_code, 409)
+            with self.assertRaises(HTTPException) as raised:
+                api_app.engine_call(service.set_lora, str(self.one), True)
+            self.assertEqual(raised.exception.status_code, 409)
         finally:
             service.worker_lock.release()
 
@@ -355,6 +383,42 @@ class ManagerTests(OfflineFixture):
 
 
 class BackendTests(OfflineFixture):
+    def test_auto_selects_profiles_from_ram_vram_and_installed_capabilities(self):
+        size = 7 * 1024**3
+        low_ram = plan_strategy(size, memory_resources(ram=12, vram=4))
+        self.assertEqual(low_ram["selected_profile"], "LOW_RAM")
+        self.assertTrue(low_ram["cpu_offload_enabled"])
+        self.assertGreater(size, 4 * 1024**3)
+        standard = plan_strategy(size, memory_resources(ram=20, vram=12))
+        self.assertEqual(standard["selected_profile"], "STANDARD")
+        low_vram = plan_strategy(size, memory_resources(ram=20, vram=4))
+        self.assertEqual(low_vram["selected_profile"], "LOW_VRAM")
+
+    def test_auto_rejects_when_no_load_strategy_has_ram_margin(self):
+        plan = plan_strategy(7 * 1024**3, memory_resources(ram=8, vram=4))
+        self.assertFalse(plan["admitted"])
+        self.assertIsNone(plan["selected_profile"])
+        self.assertTrue(any("RAM" in reason for reason in plan["reasons"]))
+
+    def test_disk_offload_is_experimental_gated_and_checks_space(self):
+        size = 7 * 1024**3
+        res = memory_resources(ram=12, vram=4, disk_free=12)
+        refused = plan_strategy(size, res, "DISK_OFFLOAD")
+        self.assertFalse(refused["admitted"])
+        selected = plan_strategy(size, res, "DISK_OFFLOAD", allow_experimental_disk=True)
+        self.assertEqual(selected["selected_profile"], "DISK_OFFLOAD")
+        self.assertTrue(selected["disk_experimental"])
+        no_space = plan_strategy(size, memory_resources(ram=12, vram=4, disk_free=2),
+                                 "DISK_OFFLOAD", allow_experimental_disk=True)
+        self.assertFalse(no_space["admitted"])
+
+    def test_disk_offload_refuses_forge_model_roots(self):
+        forge_models = self.root / "Forge" / "models" / "Stable-diffusion" / "offload"
+        with patch.dict(os.environ, {"BUTTERVISION_SDXL_DISK_OFFLOAD_DIR": str(forge_models)}):
+            result = _disk_target()
+        self.assertFalse(result["valid"])
+        self.assertIn("Forge", result["reason"])
+
     def test_budget_blocks_before_factor_load(self):
         with patch("core.sdxl_pipeline.available_ram", return_value=0), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file") as load:
             with self.assertRaisesRegex(ValueError, "RAM"):
@@ -366,27 +430,20 @@ class BackendTests(OfflineFixture):
             with self.assertRaisesRegex(ValueError, "VRAM"):
                 check_budget(str(self.xl))
 
-    def test_low_cpu_memory_budget_is_checkpoint_plus_explicit_margin(self):
+    def test_budget_exposes_estimates_and_runtime_resources(self):
         from core.sdxl_pipeline import inspect_load_budget
-        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=True), patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 8 * 1024**3)):
+        resources = memory_resources(ram=16, vram=8)
+        with patch("core.sdxl_pipeline.collect_resources", return_value=resources), patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3):
             budget = inspect_load_budget(self.xl)
         self.assertTrue(budget["admitted"])
-        self.assertEqual(budget["estimated_required_ram_bytes"], self.xl.stat().st_size + 2 * 1024**3)
+        self.assertEqual(budget["ram_low_required_bytes"], self.xl.stat().st_size + 2 * 1024**3)
         self.assertTrue(budget["low_cpu_mem_usage_available"])
-        self.assertEqual(budget["ram_weight_multiplier"], 1)
-        self.assertEqual(budget["strategy"], "diffusers_low_cpu_mem_usage_sequential_cpu_offload")
+        self.assertEqual(budget["ram_process_rss_bytes"], 512 * 1024**2)
+        self.assertEqual(budget["selected_profile"], "STANDARD")
 
-    def test_cpu_fallback_accounts_for_float32_weight_expansion(self):
-        from core.sdxl_pipeline import inspect_load_budget
-        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=True), patch("torch.cuda.is_available", return_value=False):
-            budget = inspect_load_budget(self.xl)
-        self.assertEqual(budget["ram_weight_multiplier"], 2)
-        self.assertEqual(budget["estimated_required_ram_bytes"], 2 * self.xl.stat().st_size + 2 * 1024**3)
-
-    def test_low_cpu_memory_budget_requires_accelerate(self):
-        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=False), patch("torch.cuda.is_available", return_value=False):
-            with self.assertRaisesRegex(ValueError, "Accelerate"):
-                check_budget(self.xl)
+    def test_low_ram_alternative_requires_accelerate(self):
+        plan = plan_strategy(7 * 1024**3, memory_resources(ram=12, vram=4, accelerate=False))
+        self.assertFalse(plan["admitted"])
 
     def test_probe_scope_is_bounded_and_rejects_unregistered_checkpoint(self):
         with patch("scripts.sdxl_isolated_probe.psutil.virtual_memory", return_value=SimpleNamespace(total=16 * 1024**3)):
@@ -404,10 +461,67 @@ class BackendTests(OfflineFixture):
             with self.assertRaisesRegex(ValueError, "dejar 4 GiB"):
                 build_scope_command(str(self.xl), memory_max_gib=13)
 
+    def test_probe_reports_child_oom_exit_without_running_an_inference(self):
+        from scripts import sdxl_isolated_probe
+        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe.subprocess, "run", return_value=SimpleNamespace(returncode=137)) as run, patch("sys.stderr"):
+            result = sdxl_isolated_probe.main(["--execute", "--model", str(self.xl)])
+        self.assertEqual(result, 137)
+        run.assert_called_once()
+
+    def test_probe_releases_cross_process_guard_after_child_oom(self):
+        from scripts import sdxl_isolated_probe
+        from core.inference_lock import acquire_inference_lock, release_inference_lock
+        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe.subprocess, "run", return_value=SimpleNamespace(returncode=137)), patch("sys.stderr"):
+            result = sdxl_isolated_probe.main(["--execute", "--model", str(self.xl)])
+        self.assertEqual(result, 137)
+        recovered = acquire_inference_lock()
+        self.assertIsNotNone(recovered)
+        release_inference_lock(recovered)
+
+    def test_cross_process_guard_is_exclusive_and_recoverable(self):
+        from core.inference_lock import acquire_inference_lock, release_inference_lock
+        with tempfile.TemporaryDirectory() as cache_dir, patch("core.inference_lock.config.CACHE_DIR", Path(cache_dir)):
+            first = acquire_inference_lock()
+            self.assertIsNotNone(first)
+            self.assertIsNone(acquire_inference_lock())
+            release_inference_lock(first)
+            recovered = acquire_inference_lock()
+            self.assertIsNotNone(recovered)
+            release_inference_lock(recovered)
+
+    def test_memory_probe_uses_most_restrictive_cgroup_ancestor(self):
+        def read_text(path):
+            values = {
+                "/proc/self/cgroup": "0::/user.slice/app.scope",
+                "/sys/fs/cgroup/user.slice/app.scope/memory.max": str(10 * 1024**3),
+                "/sys/fs/cgroup/user.slice/app.scope/memory.current": str(8 * 1024**3),
+                "/sys/fs/cgroup/user.slice/memory.max": str(12 * 1024**3),
+                "/sys/fs/cgroup/user.slice/memory.current": str(11 * 1024**3),
+                "/sys/fs/cgroup/memory.max": "max",
+                "/sys/fs/cgroup/memory.current": str(20 * 1024**3),
+            }
+            if str(path) not in values:
+                raise OSError("not present")
+            return values[str(path)]
+
+        with patch.object(Path, "read_text", autospec=True, side_effect=lambda path, *args, **kwargs: read_text(path)):
+            limit, current, available = _cgroup_memory()
+        self.assertEqual(limit, 12 * 1024**3)
+        self.assertEqual(current, 11 * 1024**3)
+        self.assertEqual(available, 1024**3)
+
+    def test_api_releases_worker_lock_when_isolated_probe_owns_guard(self):
+        service = self.service()
+        with patch("api.generation.acquire_inference_lock", return_value=None):
+            with self.assertRaises(EngineBusyError):
+                service.set_model(str(self.sd))
+        self.assertFalse(service.worker_lock.locked())
+
     def test_sdxl_offload_precision_local_config_and_cleanup(self):
         pipe = Mock()
         pipe.components = {}
-        with patch("torch.cuda.is_available", return_value=True), patch("core.sdxl_pipeline.check_budget"), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", return_value=pipe) as load:
+        low_vram_plan = {"selected_profile": "LOW_VRAM", "cpu_offload_enabled": True, "load_phase": "planned"}
+        with patch("torch.cuda.is_available", return_value=True), patch("core.sdxl_pipeline.check_budget", return_value=low_vram_plan), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", return_value=pipe) as load:
             backend = SDXLPipeline(str(self.xl))
             self.assertIs(backend.load_pipeline(), pipe)
             self.assertIs(backend.load_pipeline(), pipe)
@@ -415,12 +529,25 @@ class BackendTests(OfflineFixture):
         self.assertEqual(load.call_args.kwargs["config"], "/local/sdxl")
         self.assertTrue(load.call_args.kwargs["local_files_only"])
         self.assertTrue(load.call_args.kwargs["low_cpu_mem_usage"])
+        self.assertFalse(load.call_args.kwargs["disable_mmap"])
         self.assertIs(load.call_args.kwargs["torch_dtype"], torch.float16)
         pipe.enable_sequential_cpu_offload.assert_called_once()
         pipe.enable_vae_tiling.assert_called_once()
         with patch("core.engine_memory.torch.cuda.is_available", return_value=False):
             backend.cleanup()
         self.assertIsNone(backend.pipe)
+
+    def test_standard_profile_uses_conventional_load_only_when_planned(self):
+        pipe = Mock()
+        pipe.components = {}
+        standard_plan = {"selected_profile": "STANDARD", "cpu_offload_enabled": False, "load_phase": "planned"}
+        with patch("torch.cuda.is_available", return_value=True), patch("core.sdxl_pipeline.check_budget", return_value=standard_plan), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", return_value=pipe) as load:
+            backend = SDXLPipeline(str(self.xl))
+            backend.load_pipeline()
+        self.assertFalse(load.call_args.kwargs["low_cpu_mem_usage"])
+        pipe.to.assert_called_once_with("cuda")
+        pipe.enable_sequential_cpu_offload.assert_not_called()
+        backend.cleanup()
 
     def test_load_failure_releases_partial_pipeline_and_can_retry(self):
         broken, working = Mock(), Mock()
@@ -429,7 +556,8 @@ class BackendTests(OfflineFixture):
         working.components = {}
         factory = Mock(side_effect=[broken, working])
         backend = SDXLPipeline(str(self.xl))
-        with patch("core.sdxl_pipeline.check_budget"), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", factory), patch("torch.cuda.is_available", return_value=False):
+        low_vram_plan = {"selected_profile": "LOW_VRAM", "cpu_offload_enabled": True, "load_phase": "planned"}
+        with patch("core.sdxl_pipeline.check_budget", return_value=low_vram_plan), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", factory), patch("torch.cuda.is_available", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "load failed"):
                 backend.load_pipeline()
             self.assertIsNone(backend.pipe)
@@ -437,6 +565,19 @@ class BackendTests(OfflineFixture):
             self.assertIs(backend.load_pipeline(), working)
         self.assertEqual(backend.load_state, "loaded")
         backend.cleanup()
+
+    def test_disk_offload_uses_and_removes_only_its_private_temp_directory(self):
+        pipe = Mock()
+        pipe.components = {}
+        with tempfile.TemporaryDirectory() as parent, patch.dict(os.environ, {"BUTTERVISION_SDXL_DISK_OFFLOAD_DIR": parent}), patch("torch.cuda.is_available", return_value=True), patch("core.sdxl_pipeline.check_budget", return_value={"selected_profile": "DISK_OFFLOAD", "cpu_offload_enabled": False, "load_phase": "planned"}), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", return_value=pipe):
+            backend = SDXLPipeline(str(self.xl), requested_strategy="DISK_OFFLOAD", allow_experimental_disk=True)
+            backend.load_pipeline()
+            temp_path = Path(backend._disk_offload_temp.name)
+            self.assertTrue(temp_path.is_dir())
+            pipe.enable_group_offload.assert_called_once()
+            self.assertEqual(pipe.enable_group_offload.call_args.kwargs["offload_to_disk_path"], str(temp_path))
+            backend.cleanup()
+            self.assertFalse(temp_path.exists())
 
     def test_two_tokenizers_are_used_and_passed_independently(self):
         class Tokenizer:

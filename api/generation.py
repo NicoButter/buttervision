@@ -23,6 +23,7 @@ from core.model_manager import ModelManager
 from core.engine_memory import bind_pizarra_metrics, collect_memory, diagnose, is_memory_error, measured_phase
 from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
 from core.sdxl_pipeline import SDXLPipeline, check_budget, inspect_load_budget, local_sdxl_config
+from core.inference_lock import acquire_inference_lock, release_inference_lock
 
 
 class EngineBusyError(RuntimeError):
@@ -180,10 +181,20 @@ class GenerationService:
         loras = self.list_loras()
         pipe = self._pipeline()
         scheduler = getattr(pipe, "scheduler", None) if pipe is not None else None
+        load_budget = getattr(self.sd_manager, "load_plan", None) or self.load_budget
+        if load_budget is None and self.family == SDXL:
+            try:
+                self.load_budget = inspect_load_budget(self.sd_manager.model_id)
+            except Exception as error:
+                self.load_budget = {"requested_profile": "AUTO", "selected_profile": None,
+                                    "admitted": False, "load_phase": "rejected",
+                                    "reasons": [type(error).__name__]}
+            load_budget = self.load_budget
         return {"status": "busy" if self.worker_lock.locked() else "idle",
                 "pipeline": self.active_pipeline, "model": Path(self.sd_manager.model_id).name,
                 "model_state": self.model_state, "model_error": self.model_error,
-                "load_budget": self.load_budget,
+                "memory_strategy": load_budget.get("selected_profile") if load_budget else None,
+                "load_budget": load_budget,
                 "family": self.family, "resolutions": self.resolutions(),
                 "active_loras": [item for item in loras if item["active"]],
                 "face_supported": self.family == SD15,
@@ -220,8 +231,7 @@ class GenerationService:
         return result
 
     def set_lora(self, path, enabled, weight=1.0):
-        if not self.worker_lock.acquire(blocking=False):
-            raise EngineBusyError()
+        inference_fd = self._acquire_mutation_locks()
         try:
             item = approved_path(path, "lora")
             key = str(item) if item is not None else str(Path(path).expanduser().absolute())
@@ -235,7 +245,7 @@ class GenerationService:
             if not enabled and key not in self.lora_registry:
                 return self.list_loras()
             if self.family == SDXL and self._pipeline() is None:
-                check_budget(self.sd_manager.model_id)
+                self.load_budget = check_budget(self.sd_manager.model_id)
             self._release_face()
             pipe = None
             try:
@@ -270,11 +280,10 @@ class GenerationService:
                 raise
             return self.list_loras()
         finally:
-            self.worker_lock.release()
+            self._release_mutation_locks(inference_fd)
 
     def set_model(self, model_id: str):
-        if not self.worker_lock.acquire(blocking=False):
-            raise EngineBusyError()
+        inference_fd = self._acquire_mutation_locks()
         try:
             if model_id != self.sd_manager.model_id:
                 resolved, family = self.model_manager.catalog_checkpoint(model_id)
@@ -306,11 +315,10 @@ class GenerationService:
                      self.active_pipeline, "failed", error_type=type(error).__name__)
             raise
         finally:
-            self.worker_lock.release()
+            self._release_mutation_locks(inference_fd)
 
     def create_job(self, mode: str, payload: dict) -> GenerationJob:
-        if not self.worker_lock.acquire(blocking=False):
-            raise EngineBusyError()
+        inference_fd = self._acquire_mutation_locks()
         job = None
         persisted = False
         try:
@@ -347,7 +355,7 @@ class GenerationService:
                     raise PizarraUnavailableError("PIZARRA no está disponible; verifica el almacenamiento y sus permisos.") from error
             with self.lock:
                 self.jobs[job.id] = job
-            thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
+            thread = threading.Thread(target=self._run_job, args=(job, inference_fd), daemon=True)
             thread.start()
             return job
         except Exception as error:
@@ -365,8 +373,27 @@ class GenerationService:
                 job.payload.clear()
             diagnose("memory_allocation_error" if is_memory_error(error) else "job_start_error",
                      self.active_pipeline, "failed", error_type=type(error).__name__)
+            self._release_mutation_locks(inference_fd)
+            raise
+
+    def _acquire_mutation_locks(self):
+        if not self.worker_lock.acquire(blocking=False):
+            raise EngineBusyError()
+        try:
+            inference_fd = acquire_inference_lock()
+        except Exception:
             self.worker_lock.release()
             raise
+        if inference_fd is None:
+            self.worker_lock.release()
+            raise EngineBusyError()
+        return inference_fd
+
+    def _release_mutation_locks(self, inference_fd):
+        try:
+            release_inference_lock(inference_fd)
+        finally:
+            self.worker_lock.release()
 
     def get_job(self, job_id: str) -> Optional[GenerationJob]:
         with self.lock:
@@ -389,7 +416,7 @@ class GenerationService:
         image_paths = list_public_output_images(config.OUTPUTS_DIR, limit)
         return [_public_output_path(path) for path in image_paths[:limit]]
 
-    def _run_job(self, job: GenerationJob):
+    def _run_job(self, job: GenerationJob, inference_fd=None):
         # create_job reserves worker_lock before starting this worker. Retain it
         # through terminal-state updates and all cleanup, including failures.
         failed = False
@@ -474,7 +501,10 @@ class GenerationService:
                     try:
                         diagnose("job_end", self.active_pipeline, job.status, job_id=job.id)
                     finally:
-                        self.worker_lock.release()
+                        try:
+                            release_inference_lock(inference_fd)
+                        finally:
+                            self.worker_lock.release()
 
     def _finish_pizarra_job(self, job, metrics, failure_category):
         """Persist a terminal state locally, even when the bank disconnects."""
