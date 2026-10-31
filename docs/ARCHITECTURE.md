@@ -1,323 +1,48 @@
-# Arquitectura de ButterVision
+# Arquitectura de Buttervision
 
-## 📐 Diseño del sistema
+## Interfaces
 
-ButterVision está diseñado con una arquitectura modular y extensible:
+React, en `web/`, es la interfaz principal para el desarrollo futuro. Presenta los flujos de crear imagen, crear video, editar imagen y editar video, además de la galería y los modos sencillo/experto. La generación de imágenes y la galería usan la API local; video y edición son experiencias visuales pendientes de integración y no simulan procesamiento.
 
-```
-┌─────────────────────────────────────────────┐
-│           Interfaz de Usuario               │
-│              (Gradio WebUI)                 │
-│  - Text-to-Image  - Image-to-Image          │
-│  - Inpainting     - Extras                  │
-└─────────────┬───────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────┐
-│         Capa de Presentación (UI)           │
-│          ui/interface.py                    │
-│  - ButterVisionUI                           │
-│  - Event handlers                           │
-│  - UI components                            │
-└─────────────┬───────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────┐
-│         Capa de Lógica (Core)               │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │  StableDiffusionManager               │ │
-│  │  (core/pipeline.py)                   │ │
-│  │  - Pipeline management                │ │
-│  │  - Optimization control               │ │
-│  │  - Generation methods                 │ │
-│  └───────────────────────────────────────┘ │
-│                                             │
-│  ┌───────────────────────────────────────┐ │
-│  │  LoRAManager                          │ │
-│  │  (core/lora_manager.py)               │ │
-│  │  - LoRA loading/unloading             │ │
-│  │  - Weight management                  │ │
-│  └───────────────────────────────────────┘ │
-└─────────────┬───────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────┐
-│    Framework Layer (HuggingFace)            │
-│  - Diffusers (pipelines)                    │
-│  - Transformers (CLIP)                      │
-│  - PyTorch (backend)                        │
-└─────────────┬───────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────┐
-│          Hardware Layer                     │
-│  - CUDA/CUDNN (GPU)                         │
-│  - CPU (fallback)                           │
-└─────────────────────────────────────────────┘
+La interfaz Gradio de `ui/interface.py` se conserva para compatibilidad y diagnóstico. No comparte navegación ni estado con React y no se modifica en esta iteración.
+
+## Flujo de React y API
+
+En desarrollo, Vite sirve React en `http://localhost:5173` y FastAPI debe estar disponible en `http://localhost:7861`. En producción local, `npm run build` crea `web/dist`; `api/app.py` entrega esos archivos cuando están presentes.
+
+```text
+React (web/src)
+  ├── páginas y componentes: presentación y estado local
+  ├── services/api.js: llamadas HTTP y rutas de archivos
+  ├── hooks/usePreferences.js: modo sencillo/experto en localStorage
+  └── FastAPI (api/app.py)
+        ├── /api/generate/txt2img
+        ├── /api/generate/face-reference
+        ├── /api/jobs/{job_id}
+        ├── /api/history
+        ├── /api/models y /api/models/active
+        └── /api/runtime
+              └── GenerationService
+                    ├── core/advanced_pipeline.py
+                    └── core/face_reference_pipeline.py
 ```
 
-## 🔧 Módulos principales
+React no cambia los contratos de la API. El navegador envía descripciones y parámetros existentes; la referencia facial se codifica como Data URL y solo se conserva en memoria durante la sesión. Las preferencias de modo, no los archivos ni los prompts, se guardan en el almacenamiento local del navegador.
 
-### 1. config.py
-Configuración centralizada del sistema.
+La API solo soporta generación de imágenes. El backend limita la resolución a 512 × 512 y el batch a 1; la referencia facial también se procesa a 512 × 512. La selección de orientación en la interfaz no puede superar estos límites. El progreso mostrado proviene del trabajo real, sin porcentajes inventados.
 
-**Clases:**
-- `ModelConfig`: Configuración del modelo y optimizaciones
-- `ServerConfig`: Configuración del servidor web
-- `UIConfig`: Configuración de la interfaz
+## Responsabilidades del backend y core
 
-**Responsabilidades:**
-- Rutas del proyecto
-- Parámetros por defecto
-- Flags de optimización
+- `api/app.py`: rutas FastAPI, CORS local, archivos estáticos del frontend y montaje de `/outputs`.
+- `api/schemas.py`: validación de parámetros y respuestas.
+- `api/generation.py`: trabajos asíncronos, polling, historial y guardado de resultados.
+- `core/advanced_pipeline.py` y `core/face_reference_pipeline.py`: motores existentes de generación. La UX v2 no los modifica.
+- `ui/interface.py`: interfaz Gradio heredada.
 
-### 2. core/pipeline.py
-Gestión del pipeline de Stable Diffusion.
+## Límites, privacidad y siguientes integraciones
 
-**Clase principal:** `StableDiffusionManager`
-
-**Métodos clave:**
-- `load_txt2img_pipeline()`: Carga pipeline de text-to-image
-- `load_img2img_pipeline()`: Carga pipeline de image-to-image
-- `generate_txt2img()`: Generación desde texto
-- `generate_img2img()`: Transformación de imágenes
-- `_apply_optimizations()`: Aplica optimizaciones de memoria
-- `change_scheduler()`: Cambia el scheduler de sampling
-
-**Optimizaciones implementadas:**
-- Float16 (FP16) precision
-- xformers memory efficient attention
-- Attention slicing
-- VAE slicing
-- CPU offloading (para VRAM extremadamente baja)
-
-### 3. core/lora_manager.py
-Gestión de LoRAs (Low-Rank Adaptations).
-
-**Clase principal:** `LoRAManager`
-
-**Métodos clave:**
-- `scan_lora_directory()`: Escanea directorio de LoRAs
-- `load_lora()`: Carga un LoRA en el pipeline
-- `unload_lora()`: Descarga un LoRA
-- `update_lora_weight()`: Actualiza peso de un LoRA
-- `load_multiple_loras()`: Carga múltiples LoRAs simultáneamente
-
-### 4. ui/interface.py
-Interfaz de usuario con Gradio.
-
-**Clase principal:** `ButterVisionUI`
-
-**Métodos clave:**
-- `create_interface()`: Construye la interfaz completa
-- `txt2img_generate()`: Handler para generación txt2img
-- `img2img_generate()`: Handler para generación img2img
-- `refresh_loras()`: Refresca lista de LoRAs
-- `_save_images()`: Guarda imágenes con metadata
-
-**Pestañas:**
-- Text-to-Image: Generación desde texto
-- Image-to-Image: Transformación de imágenes
-- Extras: Herramientas adicionales
-
-### 5. main.py
-Punto de entrada principal.
-
-**Funciones:**
-- `parse_args()`: Parseo de argumentos CLI
-- `apply_launch_config()`: Aplica configuración de lanzamiento
-- `print_system_info()`: Muestra info del sistema
-- `main()`: Función principal
-
-## 🔄 Flujo de ejecución
-
-### Inicio de la aplicación:
-
-```
-1. main.py ejecutado
-   ↓
-2. Parse argumentos CLI
-   ↓
-3. Aplicar configuración (config.py)
-   ↓
-4. Mostrar info del sistema
-   ↓
-5. Crear interfaz (ui/interface.py)
-   ↓
-6. Inicializar ButterVisionUI
-   ↓
-7. Crear StableDiffusionManager
-   ↓
-8. Escanear LoRAs disponibles
-   ↓
-9. Lanzar servidor Gradio
-   ↓
-10. Interfaz disponible en http://localhost:7860
-```
-
-### Generación de imagen (txt2img):
-
-```
-1. Usuario ingresa prompt y parámetros
-   ↓
-2. Clic en botón "Generate"
-   ↓
-3. txt2img_generate() llamado
-   ↓
-4. Verificar/cambiar scheduler
-   ↓
-5. Cargar pipeline txt2img (si no está cargado)
-   ├─ Aplicar optimizaciones
-   ├─ Configurar scheduler
-   └─ Mover a GPU/CPU
-   ↓
-6. Gestionar LoRAs
-   ├─ Descargar LoRAs previos
-   ├─ Cargar LoRAs seleccionados
-   └─ Configurar pesos
-   ↓
-7. Generar seed (si es -1)
-   ↓
-8. Llamar pipeline.generate_txt2img()
-   ├─ Tokenizar prompt
-   ├─ Generar embeddings
-   ├─ Denoising loop (steps)
-   ├─ Aplicar CFG
-   └─ Decodificar VAE
-   ↓
-9. Guardar imágenes en outputs/
-   ↓
-10. Retornar imágenes y metadata
-   ↓
-11. Mostrar en galería UI
-```
-
-## 💾 Gestión de memoria
-
-### Estrategia de carga de pipelines:
-
-1. **Lazy loading**: Los pipelines se cargan bajo demanda
-2. **Component sharing**: txt2img/img2img comparten componentes
-3. **Explicit unloading**: Método `unload_pipeline()` para liberar VRAM
-
-### Optimizaciones por nivel de VRAM:
-
-| VRAM | Modo | Optimizaciones |
-|------|------|----------------|
-| < 4GB | `--lowvram` | FP16 + xformers + slicing + CPU offload |
-| 4-6GB | `--medvram` | FP16 + xformers + slicing |
-| 6GB+ | Normal | FP16 + xformers |
-| 8GB+ | `--no-optimizations` | Ninguna |
-
-## 🔌 Extensibilidad
-
-### Añadir nuevo generador:
-
-1. Crear método en `StableDiffusionManager`:
-```python
-def generate_inpaint(self, image, mask, prompt, ...):
-    pipe = self.load_inpaint_pipeline()
-    # ... lógica de generación
-    return images
-```
-
-2. Añadir handler en `ButterVisionUI`:
-```python
-def inpaint_generate(self, image, mask, prompt, ...):
-    images = self.sd_manager.generate_inpaint(...)
-    return images, info
-```
-
-3. Añadir pestaña en `create_interface()`:
-```python
-with gr.Tab("🎨 Inpainting"):
-    # ... componentes UI
-```
-
-### Añadir soporte para ControlNet:
-
-1. Extender `StableDiffusionManager` con métodos ControlNet
-2. Crear `core/controlnet_manager.py` similar a `lora_manager.py`
-3. Añadir pestaña UI con controles específicos
-
-### Sistema de plugins (futuro):
-
-```python
-# extensions/my_plugin/__init__.py
-class MyPlugin:
-    def __init__(self, sd_manager):
-        self.sd_manager = sd_manager
-    
-    def on_generate_start(self, params):
-        # Hook antes de generar
-        pass
-    
-    def on_generate_end(self, images):
-        # Hook después de generar
-        return images
-```
-
-## 📊 Diagrama de dependencias
-
-```
-main.py
-  ├── config.py
-  ├── ui/interface.py
-  │     ├── core/pipeline.py
-  │     │     └── diffusers
-  │     │           └── torch
-  │     └── core/lora_manager.py
-  │           └── config.py
-  └── gradio
-```
-
-## 🔒 Consideraciones de seguridad
-
-1. **Safety checker**: Opcional, desactivado por defecto para ahorrar VRAM
-2. **Autenticación**: Soportada vía `--auth usuario:contraseña`
-3. **Validación de inputs**: Límites en resolución y parámetros
-4. **Sandboxing**: Extensiones futuras ejecutarán en contexto limitado
-
-## ⚡ Optimizaciones de rendimiento
-
-### 1. Pipeline caching
-- Reutilización de componentes entre txt2img/img2img
-- Avoid reloading cuando solo cambian parámetros
-
-### 2. Attention optimization
-- xformers: Reduce VRAM significativamente
-- Attention slicing: Divide cálculos en chunks
-- VAE slicing: Procesa VAE en batches
-
-### 3. Precision mixing
-- FP16 para UNet (ahorra VRAM)
-- Opción de FP32 para mayor precisión
-
-### 4. Batching inteligente
-- Generación de múltiples imágenes en un solo pase
-- Configuración de `num_images_per_prompt`
-
-## 🚀 Roadmap técnico
-
-### Corto plazo:
-- [ ] Caché de embeddings de texto
-- [ ] Compilación de modelos (torch.compile)
-- [ ] WebSocket para updates en tiempo real
-
-### Medio plazo:
-- [ ] API REST con FastAPI
-- [ ] Queue system para múltiples usuarios
-- [ ] Model manager (descarga automática)
-
-### Largo plazo:
-- [ ] Distributed generation (multi-GPU)
-- [ ] Cloud integration
-- [ ] Advanced plugin system con hot-reload
-
-## 📚 Referencias
-
-- [Diffusers Documentation](https://huggingface.co/docs/diffusers)
-- [Gradio Documentation](https://gradio.app/docs)
-- [PyTorch Optimization](https://pytorch.org/tutorials/recipes/recipes/tuning_guide.html)
-- [xformers](https://github.com/facebookresearch/xformers)
+- No hay endpoints de API para crear videos, editar imágenes o editar videos; las pantallas correspondientes no envían solicitudes.
+- La UI de edición no modifica ni sobrescribe archivos originales.
+- `api/app.py` expone todo el directorio `outputs/` mediante `/outputs` sin autenticación. La API de generación actual también guarda `reference_face.png` junto a los resultados. La API y esos archivos deben mantenerse en una instalación local confiable; acceso controlado, retención mínima y endurecimiento de privacidad quedan pendientes.
+- No se añade telemetría, almacenamiento remoto ni servicio externo. La tipografía y los elementos gráficos usan recursos locales del sistema y CSS.
+- Un futuro flujo de edición requiere un contrato de API propio antes de conectar cualquier procesamiento.

@@ -1,13 +1,14 @@
-# 🎨 ButterVision - Stable Diffusion WebUI
+# 🎨 Buttervision
 
-WebUI ligero y personalizado para Stable Diffusion, similar a Automatic1111 pero optimizado y modular.
+Aplicación local para crear imágenes mediante inteligencia artificial. React es la interfaz principal de desarrollo; la interfaz Gradio se conserva para compatibilidad y diagnóstico.
 
 ## ✨ Características
 
-- **Interfaz web moderna** con Gradio
-- **Text-to-Image**: Genera imágenes desde prompts de texto
-- **Face Reference**: Genera imágenes preservando identidad facial con InstantID
-- **Image-to-Image**: Transforma imágenes existentes
+- **Interfaz React en español** con modo sencillo y modo experto
+- **Crear imagen**: generación conectada a la API local existente, con o sin referencia facial
+- **Mis creaciones**: galería de imágenes devuelta por la API
+- **Crear video y editar medios**: pantallas preparadas, todavía sin procesamiento conectado
+- **Gradio**: interfaz anterior disponible para compatibilidad y diagnóstico
 - **Soporte para LoRAs**: Carga dinámicamente múltiples LoRAs
 - **Optimizado para baja VRAM**: defaults conservadores para GTX 1650 / 4GB VRAM
 - **Múltiples schedulers**: DPM++, Euler, DDIM, etc.
@@ -94,6 +95,25 @@ models/stable-diffusion/cyberrealistic_final.safetensors
 ```
 
 La interfaz se abrirá automáticamente en: `http://localhost:7860`
+
+El comando anterior inicia la interfaz Gradio de compatibilidad. Para iniciar la API local que alimenta la interfaz React:
+
+```bash
+source venv/bin/activate
+uvicorn api.app:app --host 127.0.0.1 --port 7861
+```
+
+En otra terminal, inicia el frontend de desarrollo:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Abre `http://localhost:5173`. Para servir React desde FastAPI en una instalación local, ejecuta `npm run build` en `web/` y luego inicia FastAPI; la API entregará `web/dist`.
+
+**Privacidad:** la API publica `outputs/` bajo `/outputs` sin autenticación y conserva la foto de referencia facial junto al resultado. No expongas el servidor a redes no confiables; proteger y limitar la retención de estos archivos requiere una iteración posterior.
 
 En Windows, usa:
 
@@ -198,9 +218,19 @@ buttervision/
 
 Regla de documentación: `README.md` queda en la raíz para GitHub. Todo documento adicional (`.md` o `.txt`) debe vivir en `docs/`. Archivos funcionales como `requirements*.txt` permanecen en la raíz.
 
-## 🎨 Uso de la interfaz
+## 🎨 Interfaces disponibles
 
-### Text-to-Image
+### React (interfaz principal)
+
+La aplicación presenta cuatro flujos: crear imagen, crear video, editar imagen y editar video. Solo la generación de imágenes y la galería están conectadas actualmente a la API. Crear video y editar medios muestran estados pendientes y no simulan procesamiento. El modo experto permite ajustar los parámetros que admite la API para la generación de imágenes.
+
+La API local implementada ofrece `POST /api/generate/txt2img`, `POST /api/generate/face-reference`, `GET /api/jobs/{job_id}`, `GET /api/history`, `GET /api/models`, `POST /api/models/active` y `GET /api/runtime`.
+
+### Gradio (compatibilidad y diagnóstico)
+
+La interfaz Gradio previa sigue disponible con `./run.sh` en `http://localhost:7860`. Sus controles y capacidades no son la interfaz principal de React.
+
+#### Text-to-Image en Gradio
 
 1. Escribe tu prompt en el campo de texto
 2. (Opcional) Añade un negative prompt
