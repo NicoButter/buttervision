@@ -5,6 +5,8 @@ import traceback
 import uuid
 import hashlib
 import math
+import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +20,7 @@ from api.uploads import decode_reference_image
 from core.advanced_pipeline import ButterVisionPipeline
 from core.face_reference_pipeline import SD15FaceReferencePipeline
 from core.model_manager import ModelManager
-from core.engine_memory import collect_memory, diagnose, is_memory_error
+from core.engine_memory import bind_pizarra_metrics, collect_memory, diagnose, is_memory_error, measured_phase
 from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
 from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
 
@@ -26,6 +28,10 @@ from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
 class EngineBusyError(RuntimeError):
     def __init__(self):
         super().__init__("El motor está ocupado generando o cambiando de modelo. Intenta nuevamente cuando termine.")
+
+
+class PizarraUnavailableError(RuntimeError):
+    """PIZARRA could not safely accept the job; no private details exposed."""
 
 
 def _now() -> str:
@@ -51,12 +57,37 @@ class GenerationJob:
     updated_at: str = field(default_factory=_now)
     warnings: List[str] = field(default_factory=list)
     _lock: object = field(default_factory=threading.RLock, repr=False)
+    _defer_completion: bool = field(default=False, repr=False)
+    _pending_completion: Optional[dict] = field(default=None, repr=False)
 
     def update(self, **kwargs):
         with self._lock:
+            if self._defer_completion and kwargs.get("status") == "completed":
+                self._pending_completion = dict(kwargs)
+                self.result_images = list(kwargs.get("result_images", self.result_images))
+                self.info = kwargs.get("info", self.info)
+                self.progress = 0.95
+                self.message = "Finalizing"
+                self.updated_at = _now()
+                return
             for key, value in kwargs.items():
                 setattr(self, key, value)
             self.updated_at = _now()
+
+    def terminal_snapshot(self):
+        with self._lock:
+            snapshot = self._snapshot()
+            if self._pending_completion is not None and self.status != "failed":
+                snapshot.update(self._pending_completion)
+                snapshot["updated_at"] = _now()
+            return snapshot
+
+    def publish_completion(self):
+        with self._lock:
+            if self._pending_completion is not None:
+                self._defer_completion = False
+                self.update(**self._pending_completion)
+                self._pending_completion = None
 
     def warn(self, message):
         with self._lock:
@@ -98,6 +129,24 @@ class GenerationService:
         self.lock = threading.Lock()
         self.worker_lock = threading.Lock()
         self.active_pipeline = "none"
+        from core.pizarra.config import PizarraConfig
+
+        self.pizarra_config = PizarraConfig.from_env()
+        self.pizarra_storage = None
+        self.pizarra_store = None
+        if self.pizarra_config.enabled:
+            from core.pizarra.storage import PizarraStorage
+            from core.pizarra.job_store import JobStore
+
+            # The ledger stays on application-local storage, not on the bank.
+            db_dir = config.PROJECT_ROOT / "data" / "pizarra"
+            if not db_dir.resolve().is_relative_to(config.PROJECT_ROOT.resolve()):
+                raise PizarraUnavailableError("El directorio local de metadatos no es válido.")
+            try:
+                self.pizarra_store = JobStore(db_dir / "jobs.sqlite3")
+                self.pizarra_storage = PizarraStorage(self.pizarra_config)
+            except (OSError, ValueError, sqlite3.Error) as error:
+                raise PizarraUnavailableError("No se pudo abrir el registro local PIZARRA.") from error
 
     def list_models(self):
         model_infos = self.model_manager.list_local_model_infos()
@@ -121,11 +170,14 @@ class GenerationService:
 
     def engine_state(self):
         loras = self.list_loras()
+        pipe = self._pipeline()
+        scheduler = getattr(pipe, "scheduler", None) if pipe is not None else None
         return {"status": "busy" if self.worker_lock.locked() else "idle",
                 "pipeline": self.active_pipeline, "model": Path(self.sd_manager.model_id).name,
                 "family": self.family, "resolutions": self.resolutions(),
                 "active_loras": [item for item in loras if item["active"]],
-                "face_supported": self.family == SD15}
+                "face_supported": self.family == SD15,
+                "scheduler": type(scheduler).__name__ if scheduler is not None else None}
 
     def _pipeline(self):
         return getattr(self.sd_manager, "pipe" if self.family == SDXL else "sd_pipeline", None)
@@ -247,6 +299,7 @@ class GenerationService:
         if not self.worker_lock.acquire(blocking=False):
             raise EngineBusyError()
         job = None
+        persisted = False
         try:
             if self.family not in (SD15, SDXL):
                 raise ValueError("Selecciona un checkpoint SD 1.5 o SDXL compatible.")
@@ -259,6 +312,17 @@ class GenerationService:
                 if self._pipeline() is None:
                     check_budget(self.sd_manager.model_id)
             job = GenerationJob(id=str(uuid.uuid4()), mode=mode, payload=dict(payload))
+            job._defer_completion = self.pizarra_store is not None
+            if self.pizarra_store is not None:
+                try:
+                    self.pizarra_store.create(job.as_dict(), engine=self.family,
+                                              model_identifier=Path(self.sd_manager.model_id).name)
+                    persisted = True
+                    self.pizarra_storage.validate()
+                    job._pizarra_start_stats = self.pizarra_storage.stats()
+                    self.pizarra_storage.create_workspace(job.id)
+                except Exception as error:
+                    raise PizarraUnavailableError("PIZARRA no está disponible; verifica el almacenamiento y sus permisos.") from error
             with self.lock:
                 self.jobs[job.id] = job
             thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
@@ -266,6 +330,14 @@ class GenerationService:
             return job
         except Exception as error:
             if job is not None:
+                if persisted:
+                    job.update(status="failed", progress=1.0, message="Failed",
+                               error="No se pudo preparar el trabajo PIZARRA.")
+                    try:
+                        self.pizarra_store.update(job.as_dict(), failure_category=(
+                            "storage_unavailable" if isinstance(error, PizarraUnavailableError) else "worker_start"))
+                    except Exception:
+                        diagnose("pizarra_metadata_error", self.active_pipeline, "failed")
                 with self.lock:
                     self.jobs.pop(job.id, None)
                 job.payload.clear()
@@ -276,7 +348,20 @@ class GenerationService:
 
     def get_job(self, job_id: str) -> Optional[GenerationJob]:
         with self.lock:
-            return self.jobs.get(job_id)
+            job = self.jobs.get(job_id)
+        if job is not None or self.pizarra_store is None:
+            return job
+        row = self.pizarra_store.get(job_id)
+        if row is None:
+            return None
+        # The payload is deliberately absent from the durable record.
+        return GenerationJob(id=row["id"], mode=row["mode"], payload={}, status=row["status"],
+                             progress=row["progress"], message=row["message"],
+                             result_images=row["result_images"], info=row["info"], error=row["error"],
+                             warnings=row["warnings"], created_at=row["created_at"], updated_at=row["updated_at"])
+
+    def get_pizarra_metrics(self, job_id):
+        return self.pizarra_store.get_metrics(job_id) if self.pizarra_store is not None else None
 
     def history(self, limit: int = 24):
         image_paths = list_public_output_images(config.OUTPUTS_DIR, limit)
@@ -286,22 +371,55 @@ class GenerationService:
         # create_job reserves worker_lock before starting this worker. Retain it
         # through terminal-state updates and all cleanup, including failures.
         failed = False
+        failure_category = None
+        metrics = None
         try:
-            job.update(status="running", progress=0.05, message="Preparing")
-            diagnose("job_start", self.active_pipeline, "running", job_id=job.id)
-            if job.mode == "txt2img":
-                self._run_txt2img(job)
-            elif job.mode == "face_reference":
-                self._run_face_reference(job)
-            else:
-                raise ValueError(f"Modo no soportado: {job.mode}")
+            if self.pizarra_store is not None:
+                from core.pizarra.metrics import PizarraMetrics
+
+                metrics = PizarraMetrics(job.id, self.family, enabled=self.pizarra_config.metrics_enabled)
+                metrics.start()
+            with metrics.phase("preparation") if metrics else nullcontext():
+                job.update(status="running", progress=0.05, message="Preparing")
+                if self.pizarra_store is not None:
+                    self.pizarra_storage.validate()
+                    self.pizarra_store.update(job.as_dict())
+                diagnose("job_start", self.active_pipeline, "running", job_id=job.id)
+            with bind_pizarra_metrics(metrics) if metrics else nullcontext():
+                with metrics.phase("pipeline_execution") if metrics else nullcontext():
+                    if job.mode == "txt2img":
+                        self._run_txt2img(job)
+                    elif job.mode == "face_reference":
+                        self._run_face_reference(job)
+                    else:
+                        raise ValueError(f"Modo no soportado: {job.mode}")
+            if self.pizarra_store is not None:
+                # A completed image is not a successfully instrumented PIZARRA
+                # job if the authorized volume disappeared during inference.
+                self.pizarra_storage.validate()
         except Exception as error:
             failed = True
             memory_error = is_memory_error(error)
+            if self.pizarra_store is not None:
+                from core.pizarra.storage import PizarraStorageError
+
+                if isinstance(error, PizarraStorageError):
+                    failure_category = "storage_unavailable"
+                elif isinstance(error, sqlite3.Error):
+                    failure_category = "metadata_error"
+                elif memory_error:
+                    failure_category = "memory_allocation"
+                else:
+                    failure_category = "inference_error"
             diagnose("memory_allocation_error" if memory_error else "inference_error",
                      self.active_pipeline, "failed", error_type=type(error).__name__)
-            message = ("Memoria insuficiente para completar la generación. Libera recursos e intenta nuevamente."
-                       if memory_error else "No se pudo completar la generación. Revisa los modelos locales y el registro del motor.")
+            if failure_category == "storage_unavailable":
+                message = "El almacenamiento PIZARRA dejó de estar disponible; el trabajo se detuvo."
+            elif failure_category == "metadata_error":
+                message = "No se pudo actualizar el registro local del trabajo."
+            else:
+                message = ("Memoria insuficiente para completar la generación. Libera recursos e intenta nuevamente."
+                           if memory_error else "No se pudo completar la generación. Revisa los modelos locales y el registro del motor.")
             job.update(status="failed", progress=1.0, error=message, message="Failed")
             # Inference tracebacks otherwise retain pipelines and device tensors
             # while cleanup runs inside the exception handler.
@@ -309,21 +427,82 @@ class GenerationService:
             error.__traceback__ = None
         finally:
             try:
-                if failed:
-                    try:
-                        self._release_face()
-                    finally:
-                        self.sd_manager.cleanup()
-                        self.lora_registry.clear()
-                        self.active_pipeline = "none"
-                collect_memory()
+                with metrics.phase("cleanup") if metrics else nullcontext():
+                    if failed:
+                        try:
+                            self._release_face()
+                        finally:
+                            self.sd_manager.cleanup()
+                            self.lora_registry.clear()
+                            self.active_pipeline = "none"
+                    collect_memory()
             except Exception:
                 diagnose("cleanup_error", self.active_pipeline, job.status)
+                if self.pizarra_store is not None:
+                    failure_category = failure_category or "cleanup_error"
+                    job.update(status="failed", progress=1.0, message="Failed",
+                               error="No se pudo finalizar la limpieza del trabajo PIZARRA.")
             finally:
                 # Keep public terminal states, not photos or prompts, in memory.
                 job.payload.clear()
-                diagnose("job_end", self.active_pipeline, job.status, job_id=job.id)
-                self.worker_lock.release()
+                try:
+                    if self.pizarra_store is not None:
+                        self._finish_pizarra_job(job, metrics, failure_category)
+                finally:
+                    try:
+                        diagnose("job_end", self.active_pipeline, job.status, job_id=job.id)
+                    finally:
+                        self.worker_lock.release()
+
+    def _finish_pizarra_job(self, job, metrics, failure_category):
+        """Persist a terminal state locally, even when the bank disconnects."""
+        storage_stats = None
+        try:
+            self.pizarra_storage.validate()
+            storage_stats = self.pizarra_storage.stats()
+            initial = getattr(job, "_pizarra_start_stats", {}) or {}
+            # I/O counters belong to this storage instance, over this job's
+            # interval; never confuse them with whole-device disk activity.
+            for key in ("read_bytes", "written_bytes", "read_seconds", "write_seconds"):
+                current, previous = storage_stats.get(key), initial.get(key)
+                storage_stats[key] = max(0, current - previous) if current is not None and previous is not None else None
+            for amount, elapsed, rate in (("read_bytes", "read_seconds", "read_bytes_per_second"),
+                                          ("written_bytes", "write_seconds", "write_bytes_per_second")):
+                count, seconds = storage_stats.get(amount), storage_stats.get(elapsed)
+                storage_stats[rate] = count / seconds if count is not None and seconds else None
+        except Exception:
+            failure_category = "storage_unavailable"
+            job.update(status="failed", progress=1.0, message="Failed",
+                       error="El almacenamiento PIZARRA dejó de estar disponible; el trabajo se detuvo.")
+        if job.status != "failed" and job._pending_completion is None:
+            failure_category = failure_category or "inference_error"
+            job.update(status="failed", progress=1.0, message="Failed",
+                       error="El trabajo terminó sin confirmar un resultado.")
+        snapshot = job.terminal_snapshot()
+        report = None
+        try:
+            if metrics is not None:
+                report = metrics.finish(snapshot["status"], storage_stats=storage_stats)
+        except Exception:
+            failure_category = failure_category or "metrics_error"
+            job.update(status="failed", progress=1.0, message="Failed",
+                       error="No se pudieron finalizar las métricas PIZARRA.")
+            snapshot = job.as_dict()
+        try:
+            self.pizarra_store.finalize(snapshot, report, failure_category=failure_category)
+        except Exception:
+            # SQLite is local to the application. If it fails, do not report a
+            # false successful job, and make a best effort to retain the error.
+            job.update(status="failed", progress=1.0, message="Failed",
+                       error="No se pudo guardar el estado local del trabajo PIZARRA.")
+            diagnose("pizarra_metadata_error", self.active_pipeline, "failed")
+            try:
+                self.pizarra_store.update(job.as_dict(), failure_category="metadata_error")
+            except Exception:
+                pass
+        else:
+            if snapshot["status"] == "completed":
+                job.publish_completion()
 
     def _release_face(self):
         if self.face_manager is not None:
@@ -443,6 +622,10 @@ class GenerationService:
         )
 
     def _save_generation(self, images, metadata):
+        with measured_phase("saving"):
+            return self._write_generation(images, metadata)
+
+    def _write_generation(self, images, metadata):
         created_at = datetime.now()
         base_name = created_at.strftime("%d%m%Y-%H%M%S-generation")
         generation_dir = config.OUTPUTS_DIR / base_name

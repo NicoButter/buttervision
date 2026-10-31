@@ -53,3 +53,14 @@ build/
 # Web frontend
 web/node_modules/
 web/dist/
+
+# PIZARRA local databases, benchmark results, and optional local mount point.
+/data/pizarra/
+/pizarra/
+/benchmarks/results/
+*.pizarra.json
+
+# Local environment may contain private paths and secrets.
+.env
+.env.*
+!.env.example

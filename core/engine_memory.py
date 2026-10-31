@@ -1,12 +1,35 @@
 """Small, privacy-safe lifecycle diagnostics and destructive model disposal."""
 import gc
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 
 import psutil
 import torch
 
 logger = logging.getLogger("uvicorn.error.engine")
+_pizarra_metrics = ContextVar("pizarra_metrics", default=None)
+
+
+@contextmanager
+def bind_pizarra_metrics(collector):
+    """Bind metrics to this worker only; inactive outside a PIZARRA job."""
+    token = _pizarra_metrics.set(collector)
+    try:
+        yield
+    finally:
+        _pizarra_metrics.reset(token)
+
+
+@contextmanager
+def measured_phase(name):
+    collector = _pizarra_metrics.get()
+    if collector is None:
+        yield
+    else:
+        with collector.phase(name):
+            yield
 
 
 def diagnose(event, pipeline="none", job_state="idle", **details):
@@ -41,7 +64,8 @@ def lifecycle(pipeline, operation):
             diagnose(f"{operation}_start", pipeline, "busy")
             state = "ok"
             try:
-                return function(*args, **kwargs)
+                with measured_phase("model_loading" if operation == "load" else "cleanup"):
+                    return function(*args, **kwargs)
             except Exception:
                 state = "failed"
                 raise

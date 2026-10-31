@@ -10,7 +10,7 @@ from typing import List, Optional
 from PIL import Image
 
 import config
-from core.engine_memory import collect_memory, lifecycle, release_owned
+from core.engine_memory import collect_memory, lifecycle, measured_phase, release_owned
 from core.prompt_limits import limit_prompts
 from core.local_assets import local_sd15_config
 
@@ -251,17 +251,18 @@ class SD15FaceReferencePipeline:
             f"ip_adapter={identity_strength:.2f}",
             flush=True,
         )
-        result = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            ip_adapter_image_embeds=ip_adapter_image_embeds,
-            width=width,
-            height=height,
-            num_inference_steps=steps,
-            guidance_scale=guidance_scale,
-            num_images_per_prompt=num_images,
-            generator=generator,
-        )
+        with measured_phase("inference_and_decoding"):
+            result = pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                ip_adapter_image_embeds=ip_adapter_image_embeds,
+                width=width,
+                height=height,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                num_images_per_prompt=num_images,
+                generator=generator,
+            )
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

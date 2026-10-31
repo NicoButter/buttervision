@@ -64,7 +64,7 @@ from diffusers import (
 from diffusers.utils import logging
 import config
 from core.model_manager import ModelManager
-from core.engine_memory import lifecycle, release_owned
+from core.engine_memory import lifecycle, measured_phase, release_owned
 from core.prompt_limits import limit_prompts
 from core.local_assets import local_sd15_config
 
@@ -477,16 +477,17 @@ class ButterVisionPipeline:
         print(f"🎨 Generando {num_images} imagen(es)...")
 
         # Generar
-        result = pipeline(
-            prompt=final_prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            num_images_per_prompt=num_images,
-            generator=generator,
-        )
+        with measured_phase("inference_and_decoding"):
+            result = pipeline(
+                prompt=final_prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                num_images_per_prompt=num_images,
+                generator=generator,
+            )
 
         # Limpiar VRAM
         if torch.cuda.is_available():

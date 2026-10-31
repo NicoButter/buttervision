@@ -27,19 +27,24 @@ def get_service():
     global service
     with service_lock:
         if service is None:
-            from api.generation import GenerationService
+            from api.generation import GenerationService, PizarraUnavailableError
 
-            service = GenerationService()
+            try:
+                service = GenerationService()
+            except PizarraUnavailableError as error:
+                raise HTTPException(status_code=503, detail="No se pudo abrir el registro local PIZARRA.") from error
         return service
 
 
 def engine_call(method, *args):
-    from api.generation import EngineBusyError
+    from api.generation import EngineBusyError, PizarraUnavailableError
 
     try:
         return method(*args)
     except EngineBusyError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except PizarraUnavailableError as error:
+        raise HTTPException(status_code=503, detail="PIZARRA no está disponible; verifica el volumen y el registro local.") from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -143,6 +148,43 @@ def get_job(job_id: str):
 @app.get("/api/history")
 def history(limit: int = 24):
     return {"images": get_service().history(limit=limit)}
+
+
+@app.get("/api/pizarra/status")
+def pizarra_status(include_budget: bool = False):
+    engine = get_service()
+    if not engine.pizarra_config.enabled:
+        return {"enabled": False, "available": None, "metrics_enabled": False, "storage": None}
+    try:
+        stats = engine.pizarra_storage.stats()
+        # Public observability is a whitelist: never return root/device paths.
+        fields = ("total_bytes", "free_bytes", "managed_bytes", "quota_bytes",
+                  "quota_remaining_bytes", "min_free_bytes", "available_bytes")
+        result = {"enabled": True, "available": True,
+                  "metrics_enabled": engine.pizarra_config.metrics_enabled,
+                  "storage": {key: stats.get(key) for key in fields}}
+    except Exception:
+        result = {"enabled": True, "available": False,
+                  "metrics_enabled": engine.pizarra_config.metrics_enabled,
+                  "storage": None, "message": "Volumen PIZARRA no disponible o no autorizado."}
+    if include_budget:
+        from core.pizarra.memory_budget import inspect_budget
+        try:
+            result["budget"] = inspect_budget("generation", storage=engine.pizarra_storage)
+        except ValueError:
+            result["budget"] = None
+    return result
+
+
+@app.get("/api/pizarra/jobs/{job_id}/metrics")
+def pizarra_job_metrics(job_id: str):
+    try:
+        result = get_service().get_pizarra_metrics(job_id)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="No se pudo consultar el registro local de métricas.") from error
+    if result is None:
+        raise HTTPException(status_code=404, detail="Métricas no disponibles para este trabajo.")
+    return result
 
 
 WEB_DIST = config.PROJECT_ROOT / "web" / "dist"

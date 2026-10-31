@@ -9,7 +9,7 @@ from huggingface_hub.constants import HF_HUB_CACHE
 from diffusers import StableDiffusionXLPipeline
 
 import config
-from core.engine_memory import lifecycle, release_owned
+from core.engine_memory import lifecycle, measured_phase, release_owned
 from core.prompt_limits import limit_prompts
 
 
@@ -102,8 +102,9 @@ class SDXLPipeline:
         second = type("EncoderView", (), {"tokenizer": pipe.tokenizer_2, "text_encoder": pipe.text_encoder_2})()
         second_prompt, second_negative = limit_prompts(second, prompt, negative_prompt, prompt_warning_callback)
         generator = torch.Generator(device="cpu").manual_seed(seed) if seed != -1 else None
-        result = pipe(prompt=first_prompt, prompt_2=second_prompt, negative_prompt=first_negative,
-                      negative_prompt_2=second_negative, generator=generator, num_images_per_prompt=num_images, **kwargs)
+        with measured_phase("inference_and_decoding"):
+            result = pipe(prompt=first_prompt, prompt_2=second_prompt, negative_prompt=first_negative,
+                          negative_prompt_2=second_negative, generator=generator, num_images_per_prompt=num_images, **kwargs)
         return result.images
 
     @lifecycle("sdxl", "release")
