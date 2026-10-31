@@ -18,7 +18,9 @@ export async function api(path, options = {}) {
     } catch {
       // Keep plain-text API errors readable.
     }
-    throw new Error(message || `Error HTTP ${response.status}`);
+    const error = new Error(message || `Error HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }

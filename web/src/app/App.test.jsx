@@ -11,16 +11,19 @@ const runtime = {
   upload_limits: { image_bytes: 10 * 1024 * 1024, video_bytes: 100 * 1024 * 1024 },
 };
 
-function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = [], busyMessage, models = [], engine = null, loras = [] } = {}) {
+function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = [], busyMessage, models = [], engine = null, loras = [], pizarra = { enabled: false, available: null, metrics_enabled: false, storage: null }, changeError, changedModels, changedLoras } = {}) {
+  let currentModels = models;
+  let currentLoras = loras;
+  let currentEngine = engine;
   globalThis.fetch = vi.fn(async (url, options = {}) => {
     if (url === "/api/runtime") return response({
       ...runtime,
       upload_limits: uploadLimits || runtime.upload_limits,
     });
-    if (url === "/api/models") return response(models);
-    if (url === "/api/engine") return response(engine);
-    if (url === "/api/loras") return response(loras);
-    if (url === "/api/loras/active") return response(loras);
+    if (url === "/api/models") return response(currentModels);
+    if (url === "/api/engine") return response(currentEngine);
+    if (url === "/api/pizarra/status") return response(pizarra);
+    if (url === "/api/loras/active") return response(currentLoras);
     if (url === "/api/history") return response({ images: history });
     if (url.startsWith("/api/generate/")) {
       if (busyMessage) return { ok: false, status: 409, text: async () => JSON.stringify({ detail: busyMessage }) };
@@ -34,7 +37,15 @@ function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = 
         warnings: jobWarnings,
       });
     }
-    if (url === "/api/models/active") return response(models);
+    if (url === "/api/models/active") {
+      if (changeError) return { ok: false, status: changeError.status, text: async () => JSON.stringify({ detail: changeError.detail }) };
+      currentModels = changedModels || models;
+      currentLoras = changedLoras || loras;
+      const selected = currentModels.find((model) => model.active);
+      if (selected && currentEngine) currentEngine = { ...currentEngine, model: selected.label, family: selected.family };
+      return response(currentModels);
+    }
+    if (url === "/api/loras") return response(currentLoras);
     throw new Error(`Unexpected API request: ${url}`);
   });
 }
@@ -71,6 +82,88 @@ describe("Buttervision UX", () => {
     expect(screen.getByText(/Retrato/)).toBeTruthy();
   });
 
+  it("muestra el selector de modelo en modo simple y avisa cuando solo hay un registrado", async () => {
+    installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
+    await openImageCreation();
+    expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
+    expect(screen.getByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeTruthy();
+    expect(screen.getByText(/no confirma que los pesos estén cargados en VRAM/)).toBeTruthy();
+  });
+
+  it("actualiza el catálogo desde el endpoint registrado", async () => {
+    installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
+    await openImageCreation();
+    const before = globalThis.fetch.mock.calls.filter(([url]) => url === "/api/models").length;
+    fireEvent.click(screen.getByRole("button", { name: "Actualizar catálogo" }));
+    await waitFor(() => expect(globalThis.fetch.mock.calls.filter(([url]) => url === "/api/models").length).toBeGreaterThan(before));
+  });
+
+  it("expone los estados PIZARRA usando solo la respuesta del backend", async () => {
+    const states = [
+      [{ enabled: true, available: true, metrics_enabled: true, storage: { total_bytes: 800_000_000_000, quota_bytes: 400_000_000_000, managed_bytes: 100_000_000_000, quota_remaining_bytes: 300_000_000_000, free_bytes: 600_000_000_000, available_bytes: 580_000_000_000, min_free_bytes: 20_000_000_000 } }, "Disponible", /400.0 GB/],
+      [{ enabled: false, available: null, metrics_enabled: false, storage: null }, "Deshabilitado", null],
+      [{ enabled: true, available: false, metrics_enabled: true, storage: null }, "No disponible", null],
+    ];
+    for (const [pizarra, label, metric] of states) {
+      cleanup(); installApiMock({ pizarra }); render(<App />);
+      expect(await screen.findByText(`PIZARRA: ${label}`)).toBeTruthy();
+      if (metric) { fireEvent.click(screen.getByText(`PIZARRA: ${label}`)); expect(await screen.findByText(metric)).toBeTruthy(); }
+    }
+  });
+
+  it("distingue backend PIZARRA desconectado como estado desconocido", async () => {
+    installApiMock();
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url, options) => url === "/api/pizarra/status" ? Promise.reject(new Error("offline")) : original(url, options));
+    render(<App />);
+    expect(await screen.findByText("PIZARRA: Desconocido")).toBeTruthy();
+  });
+
+  it("confirma cambio SD 1.5 a SDXL y refresca motor y LoRA", async () => {
+    const models = [
+      { label: "CyberRealistic", value: "cyber", family: "sd15", active: true },
+      { label: "Juggernaut XL v9", value: "xl", family: "sdxl", active: false },
+    ];
+    const changed = models.map((model) => ({ ...model, active: model.value === "xl" }));
+    installApiMock({ models, engine: { model: "CyberRealistic", family: "sd15", status: "idle" }, changedModels: changed, changedLoras: [{ value: "xl-lora", label: "LoRA XL", family: "sdxl", active: false, compatible: true }] });
+    await openImageCreation();
+    fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "xl" } });
+    await waitFor(() => expect(screen.getByLabelText("Checkpoint registrado").value).toBe("xl"));
+    expect(globalThis.fetch.mock.calls.some(([url, options]) => url === "/api/models/active" && options.method === "POST")).toBe(true);
+    expect(globalThis.fetch.mock.calls.filter(([url]) => ["/api/models", "/api/loras", "/api/engine"].includes(url)).length).toBeGreaterThan(3);
+  });
+
+  it("mantiene el modelo anterior y explica HTTP 409 durante un cambio", async () => {
+    installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }, { label: "Juggernaut", value: "xl", family: "sdxl", active: false }], changeError: { status: 409, detail: "busy" } });
+    await openImageCreation();
+    fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "xl" } });
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "El motor está ocupado. Espera a que termine la generación para cambiar de modelo.");
+    expect(screen.getByText("CyberRealistic")).toBeTruthy();
+  });
+
+  it("permite volver de SDXL a SD 1.5 y bloquea familias desconocidas", async () => {
+    const models = [
+      { label: "CyberRealistic", value: "cyber", family: "sd15", active: false },
+      { label: "Juggernaut XL v9", value: "xl", family: "sdxl", active: true },
+      { label: "Checkpoint sin identificar", value: "unknown", family: "unknown", active: false },
+    ];
+    const changed = models.map((model) => ({ ...model, active: model.value === "cyber" }));
+    installApiMock({ models, engine: { model: "Juggernaut XL v9", family: "sdxl", status: "idle" }, changedModels: changed });
+    await openImageCreation();
+    expect(screen.getByRole("option", { name: /Checkpoint sin identificar/ }).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "cyber" } });
+    await waitFor(() => expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber"));
+    expect(await screen.findByText(/Face Reference solo admite SD 1.5/)).toBeTruthy();
+  });
+
+  it("conserva checkpoint ante HTTP 400 y muestra el motivo del backend", async () => {
+    installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }, { label: "Juggernaut", value: "xl", family: "sdxl", active: false }], changeError: { status: 400, detail: "Modelo no registrado" } });
+    await openImageCreation();
+    fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "xl" } });
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "No se pudo cambiar el modelo: Modelo no registrado");
+    expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
+  });
+
   it("muestra restricciones SDXL y deshabilita cambios con el motor ocupado", async () => {
     installApiMock({
       models: [{ label: "Juggernaut", value: "xl", family: "sdxl", active: true }],
@@ -80,7 +173,7 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     expect(await screen.findByText(/Face Reference solo admite SD 1.5/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
-    expect(screen.getByLabelText("Modelo / checkpoint").disabled).toBe(true);
+    expect(screen.getByLabelText("Checkpoint registrado").disabled).toBe(true);
     expect(screen.getByLabelText(/SD15/).disabled).toBe(true);
     expect(screen.getByText("Familia incompatible")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Actualizar catálogo" }).disabled).toBe(true);

@@ -3,6 +3,8 @@ import AdvancedSettings from "../components/AdvancedSettings.jsx";
 import BeforeAfterSlider from "../components/BeforeAfterSlider.jsx";
 import GenerationProgress from "../components/GenerationProgress.jsx";
 import MediaUploader from "../components/MediaUploader.jsx";
+import ModelSelector from "../components/ModelSelector.jsx";
+import PizarraStatus from "../components/PizarraStatus.jsx";
 import { usePreferences } from "../hooks/usePreferences.js";
 import { api, outputUrl, userFacingError } from "../services/api.js";
 
@@ -62,7 +64,7 @@ function HomePage({ navigate }) {
 
 function CreateImagePage({
   form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job, uploadLimits,
-  mode, models, activeModel, onModelChange, navigate, engine, loras, onLoraChange, onRefresh,
+  mode, models, activeModel, onModelChange, navigate, engine, loras, onLoraChange, onRefresh, modelError,
 }) {
   const isXL = (engine?.family || activeModel?.family) === "sdxl";
   const dimensions = isXL ? { portrait: [640, 768], square: [768, 768], landscape: [768, 640] } : { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
@@ -95,6 +97,7 @@ function CreateImagePage({
             <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
             {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
           </div>
+          <ModelSelector models={models} activeModel={activeModel} busy={busy} onChange={onModelChange} onRefresh={onRefresh} error={modelError} engine={engine} />
           <label className="field">
             <span>¿Qué imagen quieres crear?</span>
             <textarea
@@ -153,13 +156,10 @@ function CreateImagePage({
               form={form}
               updateField={updateField}
               models={models}
-              activeModel={activeModel}
-              onModelChange={onModelChange}
               faceReference={faceReference}
               busy={busy}
               loras={loras}
               onLoraChange={onLoraChange}
-              onRefresh={onRefresh}
               dimensions={availableDimensions}
             />
           )}
@@ -363,6 +363,7 @@ export default function App() {
   const [job, setJob] = useState(null);
   const [generationError, setGenerationError] = useState("");
   const [metadataError, setMetadataError] = useState("");
+  const [modelError, setModelError] = useState("");
   const [selectedImage, setSelectedImage] = useState("");
   const [imageEditMedia, setImageEditMedia] = useState(null);
   const [videoEditMedia, setVideoEditMedia] = useState(null);
@@ -568,22 +569,23 @@ export default function App() {
   }
 
   async function handleModelChange(event) {
+    const requestedId = event.target.value;
+    const oldModel = activeModel;
+    setModelError("");
     setModelBusy(true);
     try {
       const nextModels = await api("/api/models/active", {
         method: "POST",
-        body: JSON.stringify({ model_id: event.target.value }),
+        body: JSON.stringify({ model_id: requestedId }),
       });
-      setModels(nextModels);
-      const selected = nextModels.find((model) => model.active);
-      if (selected) {
-        setEngine((current) => ({ ...current, model: selected.label, family: selected.family, resolutions: selected.family === "sdxl" ? [512, 640, 768] : [256, 320, 384, 448, 512] }));
-        setForm((current) => ({ ...current, width: selected.family === "sdxl" ? 768 : 512, height: selected.family === "sdxl" ? 768 : 512 }));
-        setLoras([]);
-      }
+      const [confirmedModels, confirmedLoras, confirmedEngine] = await Promise.all([api("/api/models"), api("/api/loras"), api("/api/engine")]);
+      setModels(confirmedModels); setLoras(confirmedLoras); setEngine(confirmedEngine);
+      const selected = confirmedModels.find((model) => model.active);
+      if (selected && oldModel?.family !== selected.family) setForm((current) => ({ ...current, width: selected.family === "sdxl" ? 768 : 512, height: selected.family === "sdxl" ? 768 : 512 }));
       setMetadataError("");
     } catch (error) {
-      setMetadataError(userFacingError(error));
+      const message = error.message || "";
+      setModelError(error.status === 409 ? "El motor está ocupado. Espera a que termine la generación para cambiar de modelo." : error.status === 400 ? `No se pudo cambiar el modelo: ${message}` : userFacingError(error));
     } finally {
       setModelBusy(false);
     }
@@ -615,7 +617,7 @@ export default function App() {
           form={form} updateField={updateField} reference={reference} setReference={setReference} onReferenceFile={loadReference}
           onGenerate={handleGenerate} busy={busy} error={generationError || pollError} job={job}
           mode={mode} models={models} activeModel={activeModel} onModelChange={handleModelChange} navigate={navigate} uploadLimits={uploadLimits}
-          engine={engine} loras={loras} onLoraChange={handleLoraChange} onRefresh={refreshCatalog}
+          engine={engine} loras={loras} onLoraChange={handleLoraChange} onRefresh={refreshCatalog} modelError={modelError}
         />
       );
     }
@@ -653,6 +655,7 @@ export default function App() {
         <button className={`mode-toggle ${mode === "expert" ? "enabled" : ""}`} onClick={toggleMode} aria-pressed={mode === "expert"}>
           {mode === "expert" ? "Modo experto · Activado" : "Modo experto"}
         </button>
+        <PizarraStatus />
       </header>
       {storageError && <p className="global-notice" role="status">{storageError}</p>}
       {metadataError && <p className="global-notice" role="status">{metadataError}</p>}

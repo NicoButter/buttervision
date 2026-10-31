@@ -22,20 +22,11 @@ function NumberField({ label, name, value, min, max, step = 1, disabled = false,
   );
 }
 
-export default function AdvancedSettings({ form, updateField, models, activeModel, onModelChange, faceReference, busy, loras, onLoraChange, onRefresh, dimensions }) {
+export default function AdvancedSettings({ form, updateField, faceReference, busy, loras, onLoraChange, dimensions }) {
   return (
     <details className="expert-settings">
       <summary>Parámetros del modo experto</summary>
       <div className="settings-grid">
-        {models.length > 0 && (
-          <label className="field field-wide">
-            <span>Modelo / checkpoint</span>
-            <select value={activeModel?.value || ""} onChange={onModelChange} disabled={busy}>
-              {models.map((model) => <option key={model.value} value={model.value} disabled={model.family === "unknown"}>{model.label} · {model.family || "desconocido"}</option>)}
-            </select>
-          </label>
-        )}
-        <button type="button" className="secondary-button field-wide" onClick={onRefresh} disabled={busy}>Actualizar catálogo</button>
         <div className="field field-wide">
           <strong>LoRA locales</strong>
           {loras.length === 0 && <span>No hay LoRA registrados.</span>}
