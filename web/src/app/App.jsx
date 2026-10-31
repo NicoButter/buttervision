@@ -152,6 +152,7 @@ function CreateImagePage({
             {busy ? "Creando imagen…" : "Crear imagen"}
           </button>
           {error && <p className="field-error" role="alert">{error}</p>}
+          {job?.warnings?.map((warning) => <p key={warning} role="status">{warning}</p>)}
         </div>
         <div className="result-column">
           <div className="result-card">

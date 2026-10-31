@@ -34,6 +34,7 @@ class JobStatusResponse(BaseModel):
     result_images: List[str] = []
     info: Optional[str] = None
     error: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

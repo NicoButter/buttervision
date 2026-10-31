@@ -21,4 +21,4 @@ done
 HOST=${HOST:-127.0.0.1}
 PORT=${PORT:-7861}
 
-python -m uvicorn api.app:app --host "$HOST" --port "$PORT"
+python -m uvicorn api.app:app --host "$HOST" --port "$PORT" --workers 1

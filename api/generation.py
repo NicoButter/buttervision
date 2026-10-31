@@ -1,7 +1,7 @@
-import gc
 import json
 import random
 import threading
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +16,12 @@ from api.uploads import decode_reference_image
 from core.advanced_pipeline import ButterVisionPipeline
 from core.face_reference_pipeline import SD15FaceReferencePipeline
 from core.model_manager import ModelManager
+from core.engine_memory import collect_memory, diagnose, is_memory_error
+
+
+class EngineBusyError(RuntimeError):
+    def __init__(self):
+        super().__init__("El motor está ocupado generando o cambiando de modelo. Intenta nuevamente cuando termine.")
 
 
 def _now() -> str:
@@ -39,20 +45,33 @@ class GenerationJob:
     error: Optional[str] = None
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+    warnings: List[str] = field(default_factory=list)
+    _lock: object = field(default_factory=threading.RLock, repr=False)
 
     def update(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-        self.updated_at = _now()
+        with self._lock:
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+            self.updated_at = _now()
+
+    def warn(self, message):
+        with self._lock:
+            if message not in self.warnings:
+                self.warnings.append(message)
 
     def as_dict(self):
+        with self._lock:
+            return self._snapshot()
+
+    def _snapshot(self):
         return {
             "id": self.id,
             "mode": self.mode,
             "status": self.status,
             "progress": self.progress,
             "message": self.message,
-            "result_images": self.result_images,
+            "result_images": list(self.result_images),
+            "warnings": list(self.warnings),
             "info": self.info,
             "error": self.error,
             "created_at": self.created_at,
@@ -74,6 +93,7 @@ class GenerationService:
         self.jobs: Dict[str, GenerationJob] = {}
         self.lock = threading.Lock()
         self.worker_lock = threading.Lock()
+        self.active_pipeline = "none"
 
     def list_models(self):
         model_infos = self.model_manager.list_local_model_infos()
@@ -87,35 +107,64 @@ class GenerationService:
         return models
 
     def set_model(self, model_id: str):
-        with self.lock:
+        if not self.worker_lock.acquire(blocking=False):
+            raise EngineBusyError()
+        try:
             if model_id != self.sd_manager.model_id:
-                self.sd_manager.change_model(model_id)
-                config.model_config.model_id = model_id
-                if self.face_manager is not None:
-                    self.face_manager.cleanup()
-                    self.face_manager = None
-        return self.list_models()
+                resolved = self.model_manager.resolve_model_path(model_id)
+                if not resolved:
+                    raise ValueError("El checkpoint debe estar disponible localmente.")
+                if resolved != self.sd_manager.model_id:
+                    diagnose("checkpoint_change_start", self.active_pipeline, "busy")
+                    self._release_face()
+                    self.sd_manager.change_model(resolved)
+                    self.active_pipeline = "none"
+                    config.model_config.model_id = resolved
+                    diagnose("checkpoint_change_end", self.active_pipeline, "idle")
+            return self.list_models()
+        except Exception as error:
+            diagnose("memory_allocation_error" if is_memory_error(error) else "checkpoint_change_error",
+                     self.active_pipeline, "failed", error_type=type(error).__name__)
+            raise
+        finally:
+            self.worker_lock.release()
 
     def create_job(self, mode: str, payload: dict) -> GenerationJob:
-        job = GenerationJob(id=str(uuid.uuid4()), mode=mode, payload=payload)
-        self.jobs[job.id] = job
-        thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
-        thread.start()
-        return job
+        if not self.worker_lock.acquire(blocking=False):
+            raise EngineBusyError()
+        job = None
+        try:
+            job = GenerationJob(id=str(uuid.uuid4()), mode=mode, payload=dict(payload))
+            with self.lock:
+                self.jobs[job.id] = job
+            thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
+            thread.start()
+            return job
+        except Exception as error:
+            if job is not None:
+                with self.lock:
+                    self.jobs.pop(job.id, None)
+                job.payload.clear()
+            diagnose("memory_allocation_error" if is_memory_error(error) else "job_start_error",
+                     self.active_pipeline, "failed", error_type=type(error).__name__)
+            self.worker_lock.release()
+            raise
 
     def get_job(self, job_id: str) -> Optional[GenerationJob]:
-        return self.jobs.get(job_id)
+        with self.lock:
+            return self.jobs.get(job_id)
 
     def history(self, limit: int = 24):
         image_paths = list_public_output_images(config.OUTPUTS_DIR, limit)
         return [_public_output_path(path) for path in image_paths[:limit]]
 
     def _run_job(self, job: GenerationJob):
-        if not self.worker_lock.acquire(blocking=False):
-            job.update(status="failed", error="Ya hay una generación en curso.", message="Busy")
-            return
+        # create_job reserves worker_lock before starting this worker. Retain it
+        # through terminal-state updates and all cleanup, including failures.
+        failed = False
         try:
             job.update(status="running", progress=0.05, message="Preparing")
+            diagnose("job_start", self.active_pipeline, "running", job_id=job.id)
             if job.mode == "txt2img":
                 self._run_txt2img(job)
             elif job.mode == "face_reference":
@@ -123,17 +172,43 @@ class GenerationService:
             else:
                 raise ValueError(f"Modo no soportado: {job.mode}")
         except Exception as error:
-            job.update(status="failed", progress=1.0, error=str(error), message="Failed")
+            failed = True
+            memory_error = is_memory_error(error)
+            diagnose("memory_allocation_error" if memory_error else "inference_error",
+                     self.active_pipeline, "failed", error_type=type(error).__name__)
+            message = ("Memoria insuficiente para completar la generación. Libera recursos e intenta nuevamente."
+                       if memory_error else "No se pudo completar la generación. Revisa los modelos locales y el registro del motor.")
+            job.update(status="failed", progress=1.0, error=message, message="Failed")
+            # Inference tracebacks otherwise retain pipelines and device tensors
+            # while cleanup runs inside the exception handler.
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         finally:
-            self.worker_lock.release()
-            gc.collect()
             try:
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                if failed:
+                    try:
+                        self._release_face()
+                    finally:
+                        self.sd_manager.cleanup()
+                        self.active_pipeline = "none"
+                collect_memory()
             except Exception:
-                pass
+                diagnose("cleanup_error", self.active_pipeline, job.status)
+            finally:
+                # Keep public terminal states, not photos or prompts, in memory.
+                job.payload.clear()
+                diagnose("job_end", self.active_pipeline, job.status, job_id=job.id)
+                self.worker_lock.release()
+
+    def _release_face(self):
+        if self.face_manager is not None:
+            manager, self.face_manager = self.face_manager, None
+            try:
+                manager.cleanup()
+            finally:
+                del manager
+                self.active_pipeline = "none"
+                collect_memory()
 
     def _normalized_common(self, payload: dict):
         prompt = (payload.get("prompt") or "").strip()
@@ -156,6 +231,8 @@ class GenerationService:
 
     def _run_txt2img(self, job: GenerationJob):
         data = self._normalized_common(job.payload)
+        self._release_face()
+        self.active_pipeline = "txt2img"
         job.update(progress=0.2, message="Generating image")
         images = self.sd_manager.generate_image(
             prompt=data["prompt"],
@@ -166,6 +243,7 @@ class GenerationService:
             height=data["height"],
             seed=data["seed"],
             num_images=data["batch_size"],
+            prompt_warning_callback=job.warn,
         )
         paths, generation_dir = self._save_generation(images, {**data, "module": "txt2img", "model": self.sd_manager.model_id})
         info = self._format_info(data, generation_dir)
@@ -189,9 +267,11 @@ class GenerationService:
         structure_strength = float(job.payload.get("structure_strength", 0.8))
 
         job.update(progress=0.15, message="Loading Face Reference")
-        self.sd_manager.cleanup()
+        if self.active_pipeline != "face_reference":
+            self.sd_manager.cleanup()
         if self.face_manager is None:
             self.face_manager = SD15FaceReferencePipeline(base_model=self.sd_manager.model_id)
+        self.active_pipeline = "face_reference"
 
         job.update(progress=0.25, message="Generating face reference")
         images = self.face_manager.generate(
@@ -206,6 +286,7 @@ class GenerationService:
             num_images=1,
             identity_strength=identity_strength,
             structure_strength=structure_strength,
+            prompt_warning_callback=job.warn,
         )
         paths, generation_dir = self._save_generation(
             images,

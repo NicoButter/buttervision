@@ -7,4 +7,4 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 call "venv\Scripts\activate.bat"
-python -m uvicorn api.app:app --host 127.0.0.1 --port 7861
+python -m uvicorn api.app:app --host 127.0.0.1 --port 7861 --workers 1

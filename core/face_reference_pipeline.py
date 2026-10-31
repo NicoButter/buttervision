@@ -4,13 +4,15 @@ Forge-compatible face reference backend.
 Uses SD 1.5 + IP-Adapter Plus Face, matching the workflow that works in Forge:
 InsightFace/CLIP-H (IPAdapter) + ip-adapter-plus-face_sd15.
 """
-import gc
 from pathlib import Path
 from typing import List, Optional
 
 from PIL import Image
 
 import config
+from core.engine_memory import collect_memory, lifecycle, release_owned
+from core.prompt_limits import limit_prompts
+from core.local_assets import local_sd15_config
 
 
 class SD15FaceReferencePipeline:
@@ -36,22 +38,9 @@ class SD15FaceReferencePipeline:
         self.pipe = None
         self.image_encoder = None
 
+    @lifecycle("face_reference", "release")
     def cleanup(self):
-        if self.pipe is not None:
-            del self.pipe
-            self.pipe = None
-        if self.image_encoder is not None:
-            del self.image_encoder
-            self.image_encoder = None
-
-        gc.collect()
-        try:
-            torch = self._load_torch()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-        except RuntimeError:
-            pass
+        release_owned(self, ("pipe", "image_encoder"))
 
     def ensure_assets(self, allow_download: bool = True) -> str:
         missing = [
@@ -119,6 +108,11 @@ class SD15FaceReferencePipeline:
         if self.pipe is not None:
             return self.pipe
 
+        return self._build_pipeline()
+
+    @lifecycle("face_reference", "load")
+    def _build_pipeline(self):
+
         torch = self._load_torch()
         from diffusers import DDIMScheduler, StableDiffusionPipeline
 
@@ -127,11 +121,13 @@ class SD15FaceReferencePipeline:
 
         pipe = StableDiffusionPipeline.from_single_file(
             self.base_model,
+            config=local_sd15_config(self.base_model),
             dtype=dtype,
             safety_checker=None,
             requires_safety_checker=False,
             local_files_only=True,
         )
+        self.pipe = pipe
         pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
 
         print("🧠 Cargando CLIP-H local para embeddings IP-Adapter Face...", flush=True)
@@ -144,6 +140,7 @@ class SD15FaceReferencePipeline:
             weight_name="",
             image_encoder_folder=None,
             low_cpu_mem_usage=True,
+            local_files_only=True,
         )
 
         if self.device == "cuda":
@@ -168,6 +165,14 @@ class SD15FaceReferencePipeline:
         return self.pipe
 
     def _encode_ip_adapter_image(self, pipe, face_image, num_images_per_prompt, do_classifier_free_guidance):
+        try:
+            return self._encode_image(pipe, face_image, num_images_per_prompt, do_classifier_free_guidance)
+        finally:
+            if self.image_encoder is not None:
+                self.image_encoder.to("cpu")
+            collect_memory()
+
+    def _encode_image(self, pipe, face_image, num_images_per_prompt, do_classifier_free_guidance):
         torch = self._load_torch()
         from diffusers.models.embeddings import ImageProjection
 
@@ -206,9 +211,6 @@ class SD15FaceReferencePipeline:
             image_embeds = torch.cat([negative_image_embeds, image_embeds], dim=0)
 
         image_embeds = image_embeds.detach().to("cpu")
-        self.image_encoder.to("cpu")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
         print("✅ Embeddings IP-Adapter Face listos", flush=True)
         return [image_embeds]
@@ -226,10 +228,12 @@ class SD15FaceReferencePipeline:
         num_images: int = 1,
         identity_strength: float = 0.35,
         structure_strength: float = 0.8,
+        prompt_warning_callback=None,
     ) -> List[Image.Image]:
         torch = self._load_torch()
         self.ensure_assets(allow_download=False)
         pipe = self._load_pipeline()
+        prompt, negative_prompt = limit_prompts(pipe, prompt, negative_prompt, prompt_warning_callback)
         pipe.set_ip_adapter_scale(float(identity_strength))
         ip_adapter_image_embeds = self._encode_ip_adapter_image(
             pipe=pipe,

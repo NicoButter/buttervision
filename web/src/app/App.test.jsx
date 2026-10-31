@@ -11,7 +11,7 @@ const runtime = {
   upload_limits: { image_bytes: 10 * 1024 * 1024, video_bytes: 100 * 1024 * 1024 },
 };
 
-function installApiMock({ history = [], onGenerate, uploadLimits } = {}) {
+function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = [], busyMessage } = {}) {
   globalThis.fetch = vi.fn(async (url, options = {}) => {
     if (url === "/api/runtime") return response({
       ...runtime,
@@ -20,6 +20,7 @@ function installApiMock({ history = [], onGenerate, uploadLimits } = {}) {
     if (url === "/api/models") return response([]);
     if (url === "/api/history") return response({ images: history });
     if (url.startsWith("/api/generate/")) {
+      if (busyMessage) return { ok: false, status: 409, text: async () => JSON.stringify({ detail: busyMessage }) };
       onGenerate?.(url, JSON.parse(options.body));
       return response({ job_id: "job-1", status: "queued" });
     }
@@ -27,6 +28,7 @@ function installApiMock({ history = [], onGenerate, uploadLimits } = {}) {
       return response({
         id: "job-1", status: "running", progress: 0.25, message: "Generando",
         result_images: [], error: null, info: null,
+        warnings: jobWarnings,
       });
     }
     if (url === "/api/models/active") return response([]);
@@ -53,6 +55,24 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Buttervision UX", () => {
+  it("muestra el rechazo del motor ocupado enviado por la API", async () => {
+    const busyMessage = "El motor está ocupado generando o cambiando de modelo.";
+    installApiMock({ busyMessage });
+    await openImageCreation();
+    fireEvent.change(screen.getByLabelText("¿Qué imagen quieres crear?"), { target: { value: "Un paisaje" } });
+    fireEvent.click(screen.getByRole("button", { name: "Crear imagen" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", busyMessage);
+  });
+
+  it("muestra la advertencia de truncamiento del trabajo", async () => {
+    const warning = "El prompt supera el límite CLIP y se truncará. El texto excedente no se procesará.";
+    installApiMock({ jobWarnings: [warning] });
+    await openImageCreation();
+    fireEvent.change(screen.getByLabelText("¿Qué imagen quieres crear?"), { target: { value: "Un paisaje" } });
+    fireEvent.click(screen.getByRole("button", { name: "Crear imagen" }));
+    expect(await screen.findByText(warning, {}, { timeout: 3000 })).toBeTruthy();
+  });
+
   it("permite comparar original y resultado cuando ambos están disponibles", () => {
     render(<BeforeAfterSlider original="original.png" result="resultado.png" />);
     const slider = screen.getByRole("slider", { name: "Comparar imagen original y resultado" });

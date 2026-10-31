@@ -1,4 +1,5 @@
 from pathlib import Path
+import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,15 +19,28 @@ from api.schemas import (
 
 
 service = None
+service_lock = threading.Lock()
 
 
 def get_service():
     global service
-    if service is None:
-        from api.generation import GenerationService
+    with service_lock:
+        if service is None:
+            from api.generation import GenerationService
 
-        service = GenerationService()
-    return service
+            service = GenerationService()
+        return service
+
+
+def engine_call(method, *args):
+    from api.generation import EngineBusyError
+
+    try:
+        return method(*args)
+    except EngineBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 app = FastAPI(title="ButterVision API", version="0.2.0")
 app.add_middleware(
@@ -83,12 +97,12 @@ def set_active_model(payload: dict):
     model_id = payload.get("model_id")
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id requerido")
-    return get_service().set_model(model_id)
+    return engine_call(get_service().set_model, model_id)
 
 
 @app.post("/api/generate/txt2img", response_model=JobCreateResponse)
 def generate_txt2img(payload: Txt2ImgRequest):
-    job = get_service().create_job("txt2img", payload.model_dump())
+    job = engine_call(get_service().create_job, "txt2img", payload.model_dump())
     return {"job_id": job.id, "status": job.status}
 
 
@@ -98,7 +112,7 @@ def generate_face_reference(payload: FaceReferenceRequest):
         validate_reference_image(payload.reference_image)
     except UploadValidationError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
-    job = get_service().create_job("face_reference", payload.model_dump())
+    job = engine_call(get_service().create_job, "face_reference", payload.model_dump())
     return {"job_id": job.id, "status": job.status}
 
 

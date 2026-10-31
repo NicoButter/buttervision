@@ -39,7 +39,7 @@ Flujo de datos:
 4. Permite activar LoRA por nombre (ej: "n1c0 person")
 5. Genera imágenes con SD Pipeline
 6. Genera videos con AnimateDiff (8-16 frames)
-7. Mantiene VRAM < 4GB con optimizaciones
+7. Reduce el consumo con slicing/offload; requiere validación real en GPUs de 4GB
 
 Optimizaciones VRAM para GTX 1650:
 - torch_dtype=torch.float16 (50% menos VRAM)
@@ -50,7 +50,6 @@ Optimizaciones VRAM para GTX 1650:
 """
 
 import torch
-import gc
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 from PIL import Image
@@ -65,6 +64,9 @@ from diffusers import (
 from diffusers.utils import logging
 import config
 from core.model_manager import ModelManager
+from core.engine_memory import lifecycle, release_owned
+from core.prompt_limits import limit_prompts
+from core.local_assets import local_sd15_config
 
 # Configurar logging
 logger = logging.get_logger(__name__)
@@ -212,6 +214,11 @@ class ButterVisionPipeline:
         if self.sd_pipeline is not None:
             return self.sd_pipeline
 
+        return self._build_sd_pipeline()
+
+    @lifecycle("txt2img", "load")
+    def _build_sd_pipeline(self):
+
         print("📥 Cargando pipeline SD...")
 
         # Cargar pipeline base
@@ -220,9 +227,11 @@ class ButterVisionPipeline:
         if self._is_single_file_model(model_source):
             pipeline = StableDiffusionPipeline.from_single_file(
                 model_source,
+                config=local_sd15_config(model_source),
                 torch_dtype=torch_dtype,
                 safety_checker=None,
                 cache_dir=str(config.model_config.cache_dir),
+                local_files_only=True,
             )
         else:
             pipeline = StableDiffusionPipeline.from_pretrained(
@@ -230,7 +239,11 @@ class ButterVisionPipeline:
                 torch_dtype=torch_dtype,
                 safety_checker=None,  # Desactivar para más velocidad
                 cache_dir=str(config.model_config.cache_dir),
+                local_files_only=True,
             )
+
+        # Own partial loads too, so the service can dispose them after an error.
+        self.sd_pipeline = pipeline
 
         # Aplicar checkpoint realista si es diferente del base
         if self.checkpoint_path != self.model_id:
@@ -240,7 +253,7 @@ class ButterVisionPipeline:
                 # Si es un modelo de HF, intentar cargarlo
                 if "/" in self.checkpoint_path:
                     # Cargar como LoRA o modelo adicional
-                    pipeline.load_lora_weights(self.checkpoint_path)
+                    pipeline.load_lora_weights(self.checkpoint_path, local_files_only=True)
                     pipeline.fuse_lora()
                     print("✅ Checkpoint aplicado como LoRA")
                 else:
@@ -421,7 +434,8 @@ class ButterVisionPipeline:
         guidance_scale: float = 5.0,  # REDUCIDO de 7.5 a 5.0 para estabilidad
         seed: int = -1,
         num_images: int = 1,
-        lora_trigger: Optional[str] = None
+        lora_trigger: Optional[str] = None,
+        prompt_warning_callback=None,
     ) -> List[Image.Image]:
         """
         Genera imágenes con el pipeline optimizado
@@ -447,7 +461,9 @@ class ButterVisionPipeline:
         final_prompt = prompt
         if lora_trigger and self.loaded_loras:
             final_prompt = f"{lora_trigger}, {prompt}"
-            print(f"🎭 Prompt con LoRA: {final_prompt}")
+
+        final_prompt, negative_prompt = limit_prompts(
+            pipeline, final_prompt, negative_prompt, prompt_warning_callback)
 
         print(f"🎨 Generando {num_images} imagen(es)...")
 
@@ -586,26 +602,13 @@ class ButterVisionPipeline:
         print("✅ Modelo cambiado. Se cargará en la próxima generación.")
 
     def cleanup(self):
-        """Limpia pipelines y libera memoria"""
-        if self.sd_pipeline:
-            del self.sd_pipeline
-            self.sd_pipeline = None
+        """Release shared pipelines and offload hooks before clearing CUDA."""
+        self._release_pipelines()
 
-        if self.img2img_pipeline:
-            del self.img2img_pipeline
-            self.img2img_pipeline = None
-
-        if self.animatediff_pipeline:
-            del self.animatediff_pipeline
-            self.animatediff_pipeline = None
-
+    @lifecycle("txt2img", "release")
+    def _release_pipelines(self):
         self.loaded_loras.clear()
-
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        print("🧹 Pipelines limpiados")
+        release_owned(self, ("sd_pipeline", "img2img_pipeline", "animatediff_pipeline"))
 
 
 # Función de conveniencia para crear pipeline optimizado
