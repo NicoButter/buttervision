@@ -78,7 +78,7 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     await screen.findByText(/LoRA activos \(1\)/);
     expect(screen.getByText(/Modelo: CyberRealistic/)).toBeTruthy();
-    expect(screen.getByText(/Familia: SD 1.5 · Motor: Disponible/)).toBeTruthy();
+    expect(screen.getByText(/Familia: SD 1.5 · Estado del modelo: Seleccionado · pendiente de carga/)).toBeTruthy();
     expect(screen.getByText(/Retrato/)).toBeTruthy();
   });
 
@@ -87,7 +87,24 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
     expect(screen.getByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeTruthy();
-    expect(screen.getByText(/no confirma que los pesos estén cargados en VRAM/)).toBeTruthy();
+    expect(screen.getByText(/Se cargará al iniciar una generación; aún no está listo/)).toBeTruthy();
+  });
+
+  it("muestra cada estado del checkpoint sin llamar listo al seleccionado", async () => {
+    const labels = [
+      ["detected", "Detectado"], ["selected", "Seleccionado · pendiente de carga"],
+      ["loading", "Cargando"], ["loaded", "Cargado · generación aún no validada"],
+      ["generating", "Generando"], ["error", "Error recuperable"], ["incompatible", "Incompatible"],
+    ];
+    for (const [state, label] of labels) {
+      cleanup();
+      installApiMock({
+        models: [{ label: "Juggernaut XL", value: "xl", family: "sdxl", active: true, state }],
+        engine: { model: "Juggernaut XL", family: "sdxl", status: "idle", model_state: state },
+      });
+      await openImageCreation();
+      expect(screen.getAllByText(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).length).toBeGreaterThan(0);
+    }
   });
 
   it("actualiza el catálogo desde el endpoint registrado", async () => {

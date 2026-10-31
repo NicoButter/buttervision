@@ -16,9 +16,10 @@ from safetensors.torch import save_file
 
 import api.app as api_app
 import config
-from api.generation import EngineBusyError, GenerationService
+from api.generation import EngineBusyError, GenerationJob, GenerationService
 from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
 from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
+from scripts.sdxl_isolated_probe import build_scope_command
 
 
 def checkpoint(path, family):
@@ -130,6 +131,30 @@ class CatalogTests(OfflineFixture):
 
 
 class ManagerTests(OfflineFixture):
+    def test_selection_state_is_not_reported_as_loaded_or_ready(self):
+        service = self.service()
+        self.assertEqual(service.model_state, "selected")
+        self.assertEqual(service.engine_state()["model_state"], "selected")
+        with patch("api.generation.local_sdxl_config", return_value="/local/config"):
+            service.set_model(str(self.xl))
+        self.assertEqual(service.model_state, "selected")
+        self.assertIsNone(service.sd_manager.pipe)
+        active = next(model for model in service.list_models() if model["active"])
+        self.assertEqual(active["state"], "selected")
+        self.assertEqual(next(model for model in service.list_models() if model["value"] == str(self.sd))["state"], "detected")
+
+    def test_txt2img_publishes_loading_generating_and_loaded_states(self):
+        service = self.service()
+        states = []
+        service.sd_manager.load_sd_pipeline = Mock(side_effect=lambda: states.append(service.model_state))
+        service.sd_manager.generate_image = Mock(side_effect=lambda **kwargs: states.append(service.model_state) or [])
+        service._save_generation = Mock(return_value=([], config.OUTPUTS_DIR / "mock"))
+        service._format_info = Mock(return_value="mock")
+        job = GenerationJob(id="test", mode="txt2img", payload={"prompt": "controlled"})
+        service._run_txt2img(job)
+        self.assertEqual(states, ["loading", "generating"])
+        self.assertEqual(service.model_state, "loaded")
+
     def test_startup_uses_sdxl_backend_when_active_model_is_sdxl(self):
         with patch.object(config.model_config, "model_id", str(self.xl)):
             service = self.service()
@@ -341,6 +366,44 @@ class BackendTests(OfflineFixture):
             with self.assertRaisesRegex(ValueError, "VRAM"):
                 check_budget(str(self.xl))
 
+    def test_low_cpu_memory_budget_is_checkpoint_plus_explicit_margin(self):
+        from core.sdxl_pipeline import inspect_load_budget
+        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=True), patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.mem_get_info", return_value=(8 * 1024**3, 8 * 1024**3)):
+            budget = inspect_load_budget(self.xl)
+        self.assertTrue(budget["admitted"])
+        self.assertEqual(budget["estimated_required_ram_bytes"], self.xl.stat().st_size + 2 * 1024**3)
+        self.assertTrue(budget["low_cpu_mem_usage_available"])
+        self.assertEqual(budget["ram_weight_multiplier"], 1)
+        self.assertEqual(budget["strategy"], "diffusers_low_cpu_mem_usage_sequential_cpu_offload")
+
+    def test_cpu_fallback_accounts_for_float32_weight_expansion(self):
+        from core.sdxl_pipeline import inspect_load_budget
+        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=True), patch("torch.cuda.is_available", return_value=False):
+            budget = inspect_load_budget(self.xl)
+        self.assertEqual(budget["ram_weight_multiplier"], 2)
+        self.assertEqual(budget["estimated_required_ram_bytes"], 2 * self.xl.stat().st_size + 2 * 1024**3)
+
+    def test_low_cpu_memory_budget_requires_accelerate(self):
+        with patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3), patch("core.sdxl_pipeline.is_accelerate_available", return_value=False), patch("torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(ValueError, "Accelerate"):
+                check_budget(self.xl)
+
+    def test_probe_scope_is_bounded_and_rejects_unregistered_checkpoint(self):
+        with patch("scripts.sdxl_isolated_probe.psutil.virtual_memory", return_value=SimpleNamespace(total=16 * 1024**3)):
+            command = build_scope_command(str(self.xl), memory_max_gib=10, timeout_seconds=300)
+        self.assertIn("--property=MemoryHigh=9G", command)
+        self.assertIn("--property=MemoryMax=10G", command)
+        self.assertIn("--property=MemorySwapMax=0", command)
+        self.assertIn("300s", command)
+        self.assertIn("--worker", command)
+        with self.assertRaisesRegex(ValueError, "catálogo local"):
+            build_scope_command(str(self.root / "outside.safetensors"), memory_max_gib=10)
+
+    def test_probe_scope_leaves_host_headroom(self):
+        with patch("scripts.sdxl_isolated_probe.psutil.virtual_memory", return_value=SimpleNamespace(total=16 * 1024**3)):
+            with self.assertRaisesRegex(ValueError, "dejar 4 GiB"):
+                build_scope_command(str(self.xl), memory_max_gib=13)
+
     def test_sdxl_offload_precision_local_config_and_cleanup(self):
         pipe = Mock()
         pipe.components = {}
@@ -351,12 +414,29 @@ class BackendTests(OfflineFixture):
         self.assertEqual(load.call_count, 1)
         self.assertEqual(load.call_args.kwargs["config"], "/local/sdxl")
         self.assertTrue(load.call_args.kwargs["local_files_only"])
+        self.assertTrue(load.call_args.kwargs["low_cpu_mem_usage"])
         self.assertIs(load.call_args.kwargs["torch_dtype"], torch.float16)
         pipe.enable_sequential_cpu_offload.assert_called_once()
         pipe.enable_vae_tiling.assert_called_once()
         with patch("core.engine_memory.torch.cuda.is_available", return_value=False):
             backend.cleanup()
         self.assertIsNone(backend.pipe)
+
+    def test_load_failure_releases_partial_pipeline_and_can_retry(self):
+        broken, working = Mock(), Mock()
+        broken.components = {}
+        broken.enable_attention_slicing.side_effect = RuntimeError("load failed")
+        working.components = {}
+        factory = Mock(side_effect=[broken, working])
+        backend = SDXLPipeline(str(self.xl))
+        with patch("core.sdxl_pipeline.check_budget"), patch("core.sdxl_pipeline.local_sdxl_config", return_value="/local/sdxl"), patch("core.sdxl_pipeline.StableDiffusionXLPipeline.from_single_file", factory), patch("torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "load failed"):
+                backend.load_pipeline()
+            self.assertIsNone(backend.pipe)
+            self.assertEqual(backend.load_state, "error")
+            self.assertIs(backend.load_pipeline(), working)
+        self.assertEqual(backend.load_state, "loaded")
+        backend.cleanup()
 
     def test_two_tokenizers_are_used_and_passed_independently(self):
         class Tokenizer:

@@ -30,6 +30,20 @@ function formatUploadLimit(bytes) {
   return `${bytes} bytes`;
 }
 
+const MODEL_STATE_LABELS = {
+  detected: "Detectado",
+  selected: "Seleccionado · pendiente de carga",
+  loading: "Cargando",
+  loaded: "Cargado · generación aún no validada",
+  generating: "Generando",
+  error: "Error recuperable",
+  incompatible: "Incompatible",
+};
+
+function modelStateLabel(state) {
+  return MODEL_STATE_LABELS[state] || "Seleccionado · pendiente de carga";
+}
+
 const TOOLS = [
   { id: "create-image", icon: "✦", title: "Crear imagen", description: "Imagina algo y conviértelo en una imagen." },
   { id: "create-video", icon: "▶", title: "Crear video", description: "Prepara una idea para darle movimiento." },
@@ -74,6 +88,7 @@ function CreateImagePage({
     Number(form.width) === Number(form.height) ? "square" :
       Number(form.width) > Number(form.height) ? "landscape" : "portrait";
   const result = job?.result_images?.[0];
+  const modelState = engine?.model_state || activeModel?.state || "selected";
 
   function chooseFormat(nextFormat) {
     const [width, height] = dimensions[nextFormat];
@@ -93,7 +108,9 @@ function CreateImagePage({
         <div className="form-card">
           <div className="notice" aria-live="polite">
             <strong>Modelo: {engine?.model || activeModel?.label || "No disponible"}</strong>
-            <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Motor: {busy ? "Ocupado" : engine ? "Disponible" : "Desconocido"}</p>
+            <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Estado del modelo: {modelStateLabel(modelState)}</p>
+            <p>Motor: {busy ? "Ocupado" : "Inactivo"}</p>
+            {engine?.model_error && modelState === "error" && <p role="status">La carga o generación falló ({engine.model_error}). Puedes volver a intentar; el motor libera los recursos parciales.</p>}
             <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
             {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
           </div>

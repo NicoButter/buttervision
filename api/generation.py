@@ -22,7 +22,7 @@ from core.face_reference_pipeline import SD15FaceReferencePipeline
 from core.model_manager import ModelManager
 from core.engine_memory import bind_pizarra_metrics, collect_memory, diagnose, is_memory_error, measured_phase
 from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
-from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
+from core.sdxl_pipeline import SDXLPipeline, check_budget, inspect_load_budget, local_sdxl_config
 
 
 class EngineBusyError(RuntimeError):
@@ -129,6 +129,9 @@ class GenerationService:
         self.lock = threading.Lock()
         self.worker_lock = threading.Lock()
         self.active_pipeline = "none"
+        self.model_state = "selected" if self.family in (SD15, SDXL) else "incompatible"
+        self.model_error = ""
+        self.load_budget = None
         from core.pizarra.config import PizarraConfig
 
         self.pizarra_config = PizarraConfig.from_env()
@@ -154,10 +157,15 @@ class GenerationService:
         models = []
         for info in model_infos:
             value = info["path"]
+            family = info.get("family", UNKNOWN)
+            state = "incompatible" if family == UNKNOWN else ("selected" if value == active else "detected")
+            if value == active:
+                state = self.model_state
             models.append({"label": Path(value).name, "value": value, "active": value == active,
-                           "family": info.get("family", UNKNOWN)})
+                           "family": family, "state": state})
         if active and all(model["value"] != active for model in models):
-            models.insert(0, {"label": Path(active).name, "value": active, "active": True, "family": self.family})
+            models.insert(0, {"label": Path(active).name, "value": active, "active": True,
+                              "family": self.family, "state": self.model_state})
         return models
 
     def resolutions(self):
@@ -174,6 +182,8 @@ class GenerationService:
         scheduler = getattr(pipe, "scheduler", None) if pipe is not None else None
         return {"status": "busy" if self.worker_lock.locked() else "idle",
                 "pipeline": self.active_pipeline, "model": Path(self.sd_manager.model_id).name,
+                "model_state": self.model_state, "model_error": self.model_error,
+                "load_budget": self.load_budget,
                 "family": self.family, "resolutions": self.resolutions(),
                 "active_loras": [item for item in loras if item["active"]],
                 "face_supported": self.family == SD15,
@@ -283,6 +293,9 @@ class GenerationService:
                         self.sd_manager.cleanup()
                         self.sd_manager = next_manager
                     self.family = family
+                    self.model_state = "selected"
+                    self.model_error = ""
+                    self.load_budget = None
                     self.lora_registry.clear()
                     self.active_pipeline = "none"
                     config.model_config.model_id = resolved
@@ -310,7 +323,16 @@ class GenerationService:
                     if dimension not in self.resolutions():
                         raise ValueError("Resolución SDXL no disponible para este perfil de hardware.")
                 if self._pipeline() is None:
-                    check_budget(self.sd_manager.model_id)
+                    try:
+                        self.load_budget = check_budget(self.sd_manager.model_id)
+                    except Exception as error:
+                        try:
+                            self.load_budget = inspect_load_budget(self.sd_manager.model_id)
+                        except Exception:
+                            self.load_budget = None
+                        self.model_state = "error"
+                        self.model_error = type(error).__name__
+                        raise
             job = GenerationJob(id=str(uuid.uuid4()), mode=mode, payload=dict(payload))
             job._defer_completion = self.pizarra_store is not None
             if self.pizarra_store is not None:
@@ -539,24 +561,38 @@ class GenerationService:
         data = self._normalized_common(job.payload)
         self._release_face()
         self.active_pipeline = "txt2img"
-        job.update(progress=0.2, message="Generating image")
-        if self.family == SD15:
-            # The legacy automatic LoRA may be installed during pipeline load.
-            # Publish it before inference so polling reflects the active state.
-            self.sd_manager.load_sd_pipeline()
-            self._sync_legacy_loras()
-        images = self.sd_manager.generate_image(
-            prompt=data["prompt"],
-            negative_prompt=data["negative_prompt"],
-            num_inference_steps=data["steps"],
-            guidance_scale=data["cfg_scale"],
-            width=data["width"],
-            height=data["height"],
-            seed=data["seed"],
-            num_images=data["batch_size"],
-            prompt_warning_callback=job.warn,
-        )
+        job.update(progress=0.15, message="Loading model")
+        self.model_state = "loading"
+        try:
+            if self.family == SD15:
+                # The legacy automatic LoRA may be installed during pipeline load.
+                # Publish it before inference so polling reflects the active state.
+                self.sd_manager.load_sd_pipeline()
+                self._sync_legacy_loras()
+            elif self.family == SDXL:
+                self.sd_manager.load_pipeline()
+            self.model_state = "loaded"
+            self.model_error = ""
+            job.update(progress=0.2, message="Generating image")
+            self.model_state = "generating"
+            images = self.sd_manager.generate_image(
+                prompt=data["prompt"],
+                negative_prompt=data["negative_prompt"],
+                num_inference_steps=data["steps"],
+                guidance_scale=data["cfg_scale"],
+                width=data["width"],
+                height=data["height"],
+                seed=data["seed"],
+                num_images=data["batch_size"],
+                prompt_warning_callback=job.warn,
+            )
+            self.model_state = "loaded"
+        except Exception as error:
+            self.model_state = "error"
+            self.model_error = type(error).__name__
+            raise
         self._sync_legacy_loras()
+        self.model_state = "loaded"
         paths, generation_dir = self._save_generation(images, {**data, "module": "txt2img", "model": self.sd_manager.model_id})
         info = self._format_info(data, generation_dir)
         job.update(
