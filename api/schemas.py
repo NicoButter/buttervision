@@ -49,3 +49,4 @@ class RuntimeInfo(BaseModel):
     cuda_available: Optional[bool]
     device_name: Optional[str]
     defaults: dict
+    upload_limits: dict

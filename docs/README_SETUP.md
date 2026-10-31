@@ -64,20 +64,24 @@ buttervision/
 
 Por ahora ButterVision expone solo **Text to Image**. El resto de módulos se agregará después de estabilizar este flujo.
 
-## 🚀 Lanzador
+## 🚀 Lanzadores locales
+
+Para iniciar la interfaz React y FastAPI juntos en `127.0.0.1:5173` y `127.0.0.1:7861`:
 
 Linux/Mac:
 
 ```bash
+./run_ux.sh
+```
+
+Gradio continúa disponible por separado en `127.0.0.1:7860`:
+
+```bash
 ./run.sh
-./run.sh --port 7861
-./run.sh --share
 ```
 
-Windows:
+Para iniciar los servicios por separado, usa `./run_api.sh` (7861) y `./run_web_dev.sh` (5173). No se enlazan a la red por defecto.
 
-```bat
-run.bat
-run.bat --port 7861
-run.bat --share
-```
+Windows: `run_ux.bat` abre React y FastAPI en terminales locales separadas; `run_api.bat` y `run_web_dev.bat` también pueden ejecutarse individualmente.
+
+**Privacidad:** `/outputs` sirve imágenes sin autenticación; archivos nombrados `reference_face.png`, prompts y metadatos no se descargan por esa ruta. Las fotos faciales ya existentes se conservan localmente, pero quedan bloqueadas desde el servidor estático. No cambies los hosts a direcciones públicas en una red no confiable.

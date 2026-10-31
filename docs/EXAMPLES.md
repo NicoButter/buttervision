@@ -3,10 +3,14 @@
 ## 1. Inicio básico
 
 ```bash
-# Iniciar con configuración por defecto
-python main.py
+# Iniciar React y FastAPI para UX v2
+./run_ux.sh
 
-# La interfaz se abrirá en http://localhost:7860
+# React: http://127.0.0.1:5173; API: http://127.0.0.1:7861
+
+# La interfaz Gradio heredada sigue disponible separadamente
+./run.sh
+# Gradio: http://127.0.0.1:7860
 ```
 
 ## 2. Optimizaciones para diferentes GPUs
@@ -47,7 +51,8 @@ python main.py --share
 # Cambiar puerto
 python main.py --port 8080
 
-# Solo acceso local
+# React/FastAPI se mantienen en loopback con ./run_ux.sh
+# Gradio también usa loopback por defecto
 python main.py --host 127.0.0.1 --port 7860
 
 # Con autenticación
@@ -57,8 +62,8 @@ python main.py --auth usuario:micontraseña --share
 ## 5. Combinaciones útiles
 
 ```bash
-# Para desarrollo local con GPU de 6GB
-python main.py --medvram --port 7861
+# Para desarrollo de UX con GPU de 6GB
+./run_ux.sh
 
 # Para servidor público con GPU de 4GB
 python main.py --lowvram --share --auth admin:secret123

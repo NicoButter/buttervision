@@ -4,7 +4,7 @@
 
 La iteración reemplaza la pantalla técnica única de React por una experiencia en español, responsive y con dos niveles de uso. La pantalla de inicio presenta las cuatro herramientas solicitadas. Crear imagen y Mis creaciones se conectan a las rutas existentes de FastAPI; crear video, editar imagen y editar video presentan su interfaz, pero no simulan procesamiento ni llaman a rutas inexistentes.
 
-El modo sencillo es el predeterminado. El modo experto expone los controles que admite la API actual. Se conservaron los contratos HTTP, los motores de inferencia y la interfaz Gradio. La compilación de producción termina correctamente y las ocho pruebas automatizadas del frontend pasan.
+El modo sencillo es el predeterminado. El modo experto expone los controles que admite la API actual. Se conservaron los contratos HTTP, los motores de inferencia y la interfaz Gradio. La compilación de producción termina correctamente y las nueve pruebas automatizadas del frontend pasan.
 
 ## B. Auditoría inicial
 

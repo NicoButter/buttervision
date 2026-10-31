@@ -18,7 +18,7 @@ for nvidia_lib_dir in "$VENV_SITE"/nvidia/*/lib; do
     fi
 done
 
-HOST=${HOST:-0.0.0.0}
-PORT=${PORT:-7860}
+HOST=${HOST:-127.0.0.1}
+PORT=${PORT:-7861}
 
 python -m uvicorn api.app:app --host "$HOST" --port "$PORT"

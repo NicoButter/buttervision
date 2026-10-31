@@ -1,4 +1,3 @@
-import base64
 import gc
 import json
 import random
@@ -6,14 +5,14 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 import config
+from api.output_files import list_public_output_images
+from api.uploads import decode_reference_image
 from core.advanced_pipeline import ButterVisionPipeline
 from core.face_reference_pipeline import SD15FaceReferencePipeline
 from core.model_manager import ModelManager
@@ -21,15 +20,6 @@ from core.model_manager import ModelManager
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
-
-
-def _decode_data_image(data_url: str) -> Image.Image:
-    if "," in data_url:
-        _, data = data_url.split(",", 1)
-    else:
-        data = data_url
-    image_bytes = base64.b64decode(data)
-    return Image.open(BytesIO(image_bytes)).convert("RGB")
 
 
 def _public_output_path(path: Path) -> str:
@@ -117,13 +107,7 @@ class GenerationService:
         return self.jobs.get(job_id)
 
     def history(self, limit: int = 24):
-        if not config.OUTPUTS_DIR.exists():
-            return []
-        image_paths = []
-        for directory in config.OUTPUTS_DIR.iterdir():
-            if directory.is_dir():
-                image_paths.extend(directory.glob("*.png"))
-        image_paths = sorted(image_paths, key=lambda path: path.stat().st_mtime, reverse=True)
+        image_paths = list_public_output_images(config.OUTPUTS_DIR, limit)
         return [_public_output_path(path) for path in image_paths[:limit]]
 
     def _run_job(self, job: GenerationJob):
@@ -198,7 +182,9 @@ class GenerationService:
         data["width"] = max(512, min(data["width"], config.model_config.face_max_width))
         data["height"] = max(512, min(data["height"], config.model_config.face_max_height))
         data["batch_size"] = 1
-        reference_image = _decode_data_image(job.payload["reference_image"])
+        reference_image_data = job.payload.pop("reference_image")
+        reference_image = decode_reference_image(reference_image_data)
+        del reference_image_data
         identity_strength = float(job.payload.get("identity_strength", 0.8))
         structure_strength = float(job.payload.get("structure_strength", 0.8))
 
@@ -231,7 +217,6 @@ class GenerationService:
                 "structure_strength": structure_strength,
                 "model": self.face_manager.base_model,
             },
-            reference_images={"reference_face.png": reference_image},
         )
         info = self._format_info(data, generation_dir, mode="Face Reference / SD1.5 IP-Adapter Face")
         job.update(
@@ -242,7 +227,7 @@ class GenerationService:
             info=info,
         )
 
-    def _save_generation(self, images, metadata, reference_images=None):
+    def _save_generation(self, images, metadata):
         created_at = datetime.now()
         base_name = created_at.strftime("%d%m%Y-%H%M%S-generation")
         generation_dir = config.OUTPUTS_DIR / base_name
@@ -259,11 +244,6 @@ class GenerationService:
             "images": [],
             "reference_images": [],
         }
-
-        for name, image in (reference_images or {}).items():
-            path = generation_dir / name
-            image.save(path)
-            metadata["reference_images"].append(str(path))
 
         png_info = PngInfo()
         png_info.add_text("ButterVision", metadata["module"])

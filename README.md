@@ -94,26 +94,19 @@ También puedes descargarlo manualmente y colocarlo en:
 models/stable-diffusion/cyberrealistic_final.safetensors
 ```
 
-La interfaz se abrirá automáticamente en: `http://localhost:7860`
-
-El comando anterior inicia la interfaz Gradio de compatibilidad. Para iniciar la API local que alimenta la interfaz React:
+Por defecto, Gradio escucha únicamente en `127.0.0.1:7860`. Para iniciar React y FastAPI juntos en sus puertos locales:
 
 ```bash
-source venv/bin/activate
-uvicorn api.app:app --host 127.0.0.1 --port 7861
+./run_ux.sh
 ```
 
-En otra terminal, inicia el frontend de desarrollo:
+Abre `http://127.0.0.1:5173`. FastAPI queda en `http://127.0.0.1:7861`. La interfaz Gradio de compatibilidad se inicia por separado con `./run.sh` en `http://127.0.0.1:7860`. Los lanzadores individuales `run_api.sh` y `run_web_dev.sh` usan los mismos puertos locales. En Windows, usa `run_ux.bat` para abrir React y FastAPI en terminales separadas, o inicia `run_api.bat` y `run_web_dev.bat` manualmente.
 
-```bash
-cd web
-npm install
-npm run dev
-```
+En Windows, `run.bat` mantiene la interfaz Gradio en `127.0.0.1:7860`.
 
-Abre `http://localhost:5173`. Para servir React desde FastAPI en una instalación local, ejecuta `npm run build` en `web/` y luego inicia FastAPI; la API entregará `web/dist`.
+**Privacidad y seguridad:** los lanzadores enlazan a loopback. `/outputs` sigue sirviendo imágenes generadas sin autenticación; los archivos de referencia existentes quedan en disco, pero las rutas conocidas de referencias, prompts y metadatos ya no se sirven por esa ruta. Las nuevas referencias no se guardan en `outputs/`. Protege la máquina local y no cambies el host a una interfaz pública: no hay autenticación, control de acceso por archivo ni retención automatizada.
 
-**Privacidad:** la API publica `outputs/` bajo `/outputs` sin autenticación y conserva la foto de referencia facial junto al resultado. No expongas el servidor a redes no confiables; proteger y limitar la retención de estos archivos requiere una iteración posterior.
+Los límites se configuran mediante `BUTTERVISION_MAX_IMAGE_UPLOAD_BYTES` (10 MiB por defecto) y `BUTTERVISION_MAX_VIDEO_UPLOAD_BYTES` (100 MiB por defecto); el frontend los obtiene de FastAPI. Se admiten JPEG, PNG y WebP para imágenes; MP4, WebM y MOV para videos. El endpoint de referencia facial vuelve a validar tamaño, formato MIME declarado y contenido de imagen.
 
 En Windows, usa:
 
@@ -126,8 +119,8 @@ run.bat
 #### Configuración del servidor
 
 ```bash
-# Cambiar puerto
-./run.sh --port 7861
+# Cambiar puerto de Gradio (por defecto 7860)
+./run.sh --port 7862
 
 # Crear share link público (Gradio)
 ./run.sh --share
@@ -135,8 +128,6 @@ run.bat
 # Añadir autenticación
 ./run.sh --auth usuario:contraseña
 
-# Cambiar host
-./run.sh --host 127.0.0.1
 ```
 
 #### Optimizaciones de VRAM
@@ -228,7 +219,7 @@ La API local implementada ofrece `POST /api/generate/txt2img`, `POST /api/genera
 
 ### Gradio (compatibilidad y diagnóstico)
 
-La interfaz Gradio previa sigue disponible con `./run.sh` en `http://localhost:7860`. Sus controles y capacidades no son la interfaz principal de React.
+La interfaz Gradio previa sigue disponible con `./run.sh` en `http://127.0.0.1:7860`. Sus controles y capacidades no son la interfaz principal de React.
 
 #### Text-to-Image en Gradio
 
@@ -253,7 +244,7 @@ Face Reference usa **InstantID** para preservar identidad facial desde una sola 
 4. Ajusta `Identity Strength` para más parecido facial y `Structure Strength` para más guía de landmarks
 5. Haz clic en "Generate Face Reference"
 
-Cada generación se guarda en `outputs/DDMMYYYY-HHMMSS-generation/` con los PNG, `reference_face.png`, `metadata.json` y `prompt.txt`.
+Cada generación guarda los PNG, `metadata.json` y `prompt.txt` en `outputs/DDMMYYYY-HHMMSS-generation/`. Las generaciones nuevas no guardan la fotografía de referencia.
 
 El baseline de ButterVision es GTX 1650 / 4GB VRAM: Face Reference arranca en `512x512`, `15 steps` y `Batch = 1`. `768x768` queda disponible como techo conservador; resoluciones mayores con InstantID/SDXL pueden hacer que el sistema mate el proceso por falta de memoria.
 

@@ -16,6 +16,8 @@ EMBEDDINGS_DIR = MODELS_DIR / "embeddings"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 CACHE_DIR = PROJECT_ROOT / "cache"
 EXTENSIONS_DIR = PROJECT_ROOT / "extensions"
+MAX_IMAGE_UPLOAD_BYTES = int(os.environ.get("BUTTERVISION_MAX_IMAGE_UPLOAD_BYTES", 10 * 1024 * 1024))
+MAX_VIDEO_UPLOAD_BYTES = int(os.environ.get("BUTTERVISION_MAX_VIDEO_UPLOAD_BYTES", 100 * 1024 * 1024))
 
 # Crear directorios si no existen
 for directory in [MODELS_DIR, SD_MODELS_DIR, LORA_DIR, CONTROLNET_DIR, EMBEDDINGS_DIR, 
@@ -76,9 +78,9 @@ class ModelConfig:
 @dataclass
 class ServerConfig:
     """Configuración del servidor web"""
-    host: str = "0.0.0.0"
-    port: int = 7861
-    share: bool = True  # Gradio share link
+    host: str = "127.0.0.1"
+    port: int = 7860
+    share: bool = False
     auth: Optional[tuple] = None  # ("usuario", "contraseña") para autenticación
     queue_concurrency: int = 1  # Número de generaciones simultáneas
 

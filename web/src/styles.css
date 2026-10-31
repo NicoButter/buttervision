@@ -232,6 +232,7 @@ h1 {
   font-size: 12px;
 }
 .format-choice:hover, .format-choice.selected { color: #f3eaff; border-color: #9474b5; background: rgba(167,122,245,.1); }
+.format-choice:disabled { cursor: not-allowed; opacity: .48; }
 .format-shape { width: 12px; height: 16px; border: 1px solid currentColor; border-radius: 2px; }
 .format-shape.square { width: 14px; height: 14px; }
 .format-shape.landscape { width: 18px; height: 12px; }

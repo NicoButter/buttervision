@@ -1,16 +1,23 @@
-function NumberField({ label, name, value, min, max, step = 1, onChange }) {
+function NumberField({ label, name, value, min, max, step = 1, disabled = false, onChange }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input
-        type="number"
-        name={name}
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => onChange(name, event.target.value)}
-      />
+      {name === "width" || name === "height" ? (
+        <select value={value} disabled={disabled} onChange={(event) => onChange(name, Number(event.target.value))}>
+          {[256, 320, 384, 448, 512].map((dimension) => <option key={dimension} value={dimension}>{dimension}</option>)}
+        </select>
+      ) : (
+        <input
+          type="number"
+          name={name}
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          disabled={disabled}
+          onChange={(event) => onChange(name, event.target.value)}
+        />
+      )}
     </label>
   );
 }
@@ -30,8 +37,8 @@ export default function AdvancedSettings({ form, updateField, models, activeMode
         )}
         <NumberField label="Pasos" name="steps" value={form.steps} min={1} max={60} onChange={updateField} />
         <NumberField label="CFG" name="cfg_scale" value={form.cfg_scale} min={0} max={20} step={0.5} onChange={updateField} />
-        <NumberField label="Ancho" name="width" value={form.width} min={256} max={512} onChange={updateField} />
-        <NumberField label="Alto" name="height" value={form.height} min={256} max={512} onChange={updateField} />
+        <NumberField label="Ancho" name="width" value={faceReference ? 512 : form.width} min={256} max={512} disabled={faceReference} onChange={updateField} />
+        <NumberField label="Alto" name="height" value={faceReference ? 512 : form.height} min={256} max={512} disabled={faceReference} onChange={updateField} />
         <NumberField label="Seed (-1 aleatoria)" name="seed" value={form.seed} min={-1} onChange={updateField} />
         <NumberField label="Batch size" name="batch_size" value={form.batch_size} min={1} max={1} onChange={updateField} />
         {faceReference && (
@@ -45,7 +52,9 @@ export default function AdvancedSettings({ form, updateField, models, activeMode
           <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
         </label>
       </div>
-      <p className="muted small">El backend limita el tamaño máximo a 512 × 512 y el batch a 1.</p>
+      <p className="muted small">
+        {faceReference ? "Face Reference solo admite formato cuadrado de 512 × 512." : "El backend limita cada dimensión a 512 px y el batch a 1."}
+      </p>
     </details>
   );
 }

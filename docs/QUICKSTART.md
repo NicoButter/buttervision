@@ -60,8 +60,9 @@ buttervision/
 
 ## Flujo típico
 
-1. **Lanzar**: `./run.sh`
-2. **Abrir**: http://localhost:7860
+1. **Lanzar React + FastAPI**: `./run_ux.sh`
+2. **Abrir React**: http://127.0.0.1:5173
+3. **Gradio heredado** (opcional): `./run.sh` en http://127.0.0.1:7860
 3. **Prompt**: "a beautiful landscape, oil painting"
 4. **Generate** → Esperar → ¡Listo!
 

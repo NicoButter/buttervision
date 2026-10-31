@@ -9,7 +9,7 @@ Uso:
 Ejemplos:
     python main.py
     python main.py --share
-    python main.py --port 7861 --model "stabilityai/stable-diffusion-2-1"
+    python main.py --port 7860 --model "stabilityai/stable-diffusion-2-1"
     python main.py --lowvram
 """
 import argparse
@@ -35,8 +35,8 @@ def parse_args():
     parser.add_argument(
         "--host",
         type=str,
-        default="0.0.0.0",
-        help="Host del servidor (default: 0.0.0.0)",
+        default="127.0.0.1",
+        help="Host del servidor Gradio (default: 127.0.0.1)",
     )
     parser.add_argument(
         "--port",

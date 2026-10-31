@@ -6,6 +6,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
+from api.output_files import is_private_output_file
+from api.uploads import UploadValidationError, validate_reference_image
 from api.schemas import (
     FaceReferenceRequest,
     JobCreateResponse,
@@ -36,7 +38,16 @@ app.add_middleware(
 )
 
 config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/outputs", StaticFiles(directory=str(config.OUTPUTS_DIR)), name="outputs")
+
+
+class PrivateOutputFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        if is_private_output_file(path):
+            raise HTTPException(status_code=404, detail="Archivo no disponible.")
+        return await super().get_response(path, scope)
+
+
+app.mount("/outputs", PrivateOutputFiles(directory=str(config.OUTPUTS_DIR)), name="outputs")
 
 
 @app.get("/api/runtime", response_model=RuntimeInfo)
@@ -54,6 +65,10 @@ def runtime_info():
             "face_steps": config.model_config.face_default_steps,
             "face_width": config.model_config.face_default_width,
             "face_height": config.model_config.face_default_height,
+        },
+        "upload_limits": {
+            "image_bytes": config.MAX_IMAGE_UPLOAD_BYTES,
+            "video_bytes": config.MAX_VIDEO_UPLOAD_BYTES,
         },
     }
 
@@ -79,6 +94,10 @@ def generate_txt2img(payload: Txt2ImgRequest):
 
 @app.post("/api/generate/face-reference", response_model=JobCreateResponse)
 def generate_face_reference(payload: FaceReferenceRequest):
+    try:
+        validate_reference_image(payload.reference_image)
+    except UploadValidationError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     job = get_service().create_job("face_reference", payload.model_dump())
     return {"job_id": job.id, "status": job.status}
 

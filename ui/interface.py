@@ -11,6 +11,7 @@ import gradio as gr
 from PIL.PngImagePlugin import PngInfo
 
 import config
+from api.output_files import list_public_output_images
 from core.advanced_pipeline import ButterVisionPipeline
 from core.model_manager import ModelManager
 
@@ -818,7 +819,7 @@ class ButterVisionUI:
         png_info.add_text("Generation Metadata", json.dumps(metadata, ensure_ascii=False))
         return png_info
 
-    def _save_generation(self, images, metadata, reference_images=None):
+    def _save_generation(self, images, metadata):
         """Guarda PNGs, prompts y metadata de una generación."""
         created_at = datetime.fromisoformat(metadata["created_at"])
         generation_dir = self._get_generation_dir(created_at)
@@ -829,11 +830,6 @@ class ButterVisionUI:
             "images": [],
             "reference_images": [],
         }
-
-        for name, reference_image in (reference_images or {}).items():
-            reference_path = generation_dir / name
-            reference_image.save(reference_path)
-            metadata["reference_images"].append(str(reference_path))
 
         png_info = self._png_metadata(metadata)
         for index, image in enumerate(images, start=1):
@@ -868,16 +864,7 @@ class ButterVisionUI:
 
     def _load_history_gallery(self, limit=12):
         """Carga las últimas imágenes generadas desde outputs."""
-        outputs_dir = config.OUTPUTS_DIR
-        if not outputs_dir.exists():
-            return []
-
-        image_paths = []
-        for directory in outputs_dir.iterdir():
-            if directory.is_dir():
-                image_paths.extend(directory.glob("*.png"))
-
-        image_paths = sorted(image_paths, key=lambda path: path.stat().st_mtime, reverse=True)
+        image_paths = list_public_output_images(config.OUTPUTS_DIR, limit)
         return [str(path) for path in image_paths[:limit]]
 
     def refresh_history(self):
@@ -1031,7 +1018,6 @@ class ButterVisionUI:
             generation_dir, _ = self._save_generation(
                 images,
                 metadata,
-                reference_images={"reference_face.png": face_image},
             )
             info = (
                 f"Mode: Face Reference / SD1.5 IP-Adapter Face\n"

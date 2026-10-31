@@ -1,4 +1,5 @@
-# ButterVision outputs - imágenes generadas
+# Generated results, prompts, and metadata remain local and untracked.
+/outputs/
 *.png
 *.jpg
 *.jpeg

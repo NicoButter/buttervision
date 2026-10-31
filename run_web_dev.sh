@@ -8,4 +8,4 @@ if [ ! -d "node_modules" ]; then
     exit 1
 fi
 
-VITE_API_BASE=${VITE_API_BASE:-http://localhost:7860} npm run dev
+npm run dev

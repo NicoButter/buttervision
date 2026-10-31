@@ -18,6 +18,15 @@ const INITIAL_FORM = {
   identity_strength: 0.8,
   structure_strength: 0.8,
 };
+const DEFAULT_UPLOAD_LIMITS = { image_bytes: 10 * 1024 * 1024, video_bytes: 100 * 1024 * 1024 };
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+
+function formatUploadLimit(bytes) {
+  if (bytes >= 1024 * 1024) return `${Math.floor(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.floor(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
+}
 
 const TOOLS = [
   { id: "create-image", icon: "✦", title: "Crear imagen", description: "Imagina algo y conviértelo en una imagen." },
@@ -52,16 +61,17 @@ function HomePage({ navigate }) {
 }
 
 function CreateImagePage({
-  form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job,
+  form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job, uploadLimits,
   mode, models, activeModel, onModelChange, navigate,
 }) {
-  const [format, setFormat] = useState("square");
   const dimensions = { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
   const faceReference = Boolean(reference);
+  const format = faceReference ? "square" :
+    Number(form.width) === Number(form.height) ? "square" :
+      Number(form.width) > Number(form.height) ? "landscape" : "portrait";
   const result = job?.result_images?.[0];
 
   function chooseFormat(nextFormat) {
-    setFormat(nextFormat);
     const [width, height] = dimensions[nextFormat];
     updateField("width", width);
     updateField("height", height);
@@ -98,6 +108,7 @@ function CreateImagePage({
                 key={value}
                 className={`format-choice ${format === value ? "selected" : ""}`}
                 aria-pressed={format === value}
+                disabled={faceReference && value !== "square"}
                 onClick={() => chooseFormat(value)}
               >
                 <span className={`format-shape ${value}`} aria-hidden="true" />{label}
@@ -108,10 +119,12 @@ function CreateImagePage({
             <div className="section-label"><strong>Foto de rostro</strong><span>Opcional</span></div>
             {!reference ? (
               <MediaUploader
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
+                allowedTypes={IMAGE_TYPES}
+                maxBytes={uploadLimits.image_bytes}
                 kind="image"
                 title="Añadir una foto de referencia"
-                description="La imagen se procesa localmente en Buttervision."
+                description={`JPEG, PNG o WebP · Máximo ${formatUploadLimit(uploadLimits.image_bytes)}`}
                 onFile={onReferenceFile}
               />
             ) : (
@@ -122,7 +135,7 @@ function CreateImagePage({
               </div>
             )}
             {faceReference && (
-              <p className="notice">La referencia facial se genera en formato cuadrado (512 × 512) por los límites actuales del backend.</p>
+              <p className="notice">Face Reference solo admite formato cuadrado de 512 × 512. La selección de orientación está limitada para coincidir con el resultado.</p>
             )}
           </div>
           {mode === "expert" && (
@@ -166,7 +179,7 @@ function CreateImagePage({
 }
 
 function PendingPage({
-  tool, navigate, media, onMediaFile, prompt, setPrompt, videoImage, setVideoImageFile, videoFace, setVideoFaceFile, removeVideoFace,
+  tool, navigate, media, onMediaFile, prompt, setPrompt, videoImage, setVideoImageFile, videoFace, setVideoFaceFile, removeVideoFace, uploadLimits,
 }) {
   const isVideo = tool.includes("video");
   const title = TOOLS.find((item) => item.id === tool)?.title;
@@ -186,7 +199,9 @@ function PendingPage({
           <div className="form-card">
             <div className="section-label"><strong>Imagen inicial</strong><span>Opcional</span></div>
             <MediaUploader
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
+              allowedTypes={IMAGE_TYPES}
+              maxBytes={uploadLimits.image_bytes}
               kind="image"
               title="Añadir imagen inicial"
               description="La generación de video aún no está conectada."
@@ -196,7 +211,9 @@ function PendingPage({
             <div className="section-label"><strong>Foto de rostro</strong><span>Opcional</span></div>
             {!videoFace ? (
               <MediaUploader
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
+                allowedTypes={IMAGE_TYPES}
+                maxBytes={uploadLimits.image_bytes}
                 kind="image"
                 title="Añadir foto de referencia"
                 description="No se enviará a ningún servicio."
@@ -234,7 +251,9 @@ function PendingPage({
         {tool === "edit-image" && (
           <div className="form-card">
             <MediaUploader
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
+              allowedTypes={IMAGE_TYPES}
+              maxBytes={uploadLimits.image_bytes}
               kind="image"
               title="Subir imagen"
               description="El archivo original no se modificará."
@@ -250,7 +269,9 @@ function PendingPage({
         {tool === "edit-video" && (
           <div className="form-card">
             <MediaUploader
-              accept="video/*"
+              accept="video/mp4,video/webm,video/quicktime"
+              allowedTypes={VIDEO_TYPES}
+              maxBytes={uploadLimits.video_bytes}
               kind="video"
               title="Subir video"
               description="Puedes previsualizar el archivo aquí."
@@ -314,6 +335,7 @@ export default function App() {
   const [form, setForm] = useState(INITIAL_FORM);
   const [reference, setReference] = useState(null);
   const [models, setModels] = useState([]);
+  const [uploadLimits, setUploadLimits] = useState(DEFAULT_UPLOAD_LIMITS);
   const [runtime, setRuntime] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -350,6 +372,9 @@ export default function App() {
       const [runtimeResult, modelResult] = results;
       if (runtimeResult.status === "fulfilled") {
         setRuntime(runtimeResult.value);
+        if (runtimeResult.value.upload_limits) {
+          setUploadLimits((current) => ({ ...current, ...runtimeResult.value.upload_limits }));
+        }
         const defaults = runtimeResult.value.defaults || {};
         setForm((current) => ({
           ...current,
@@ -518,7 +543,7 @@ export default function App() {
         <CreateImagePage
           form={form} updateField={updateField} reference={reference} setReference={setReference} onReferenceFile={loadReference}
           onGenerate={handleGenerate} busy={busy} error={generationError || pollError} job={job}
-          mode={mode} models={models} activeModel={activeModel} onModelChange={handleModelChange} navigate={navigate}
+          mode={mode} models={models} activeModel={activeModel} onModelChange={handleModelChange} navigate={navigate} uploadLimits={uploadLimits}
         />
       );
     }
@@ -536,6 +561,7 @@ export default function App() {
         videoFace={videoFace}
         setVideoFaceFile={setVideoFaceFile}
         removeVideoFace={removeVideoFace}
+        uploadLimits={uploadLimits}
         prompt={page === "edit-image" ? imageEditPrompt : page === "edit-video" ? videoEditPrompt : videoPrompt}
         setPrompt={page === "edit-image" ? setImageEditPrompt : page === "edit-video" ? setVideoEditPrompt : setVideoPrompt}
       />

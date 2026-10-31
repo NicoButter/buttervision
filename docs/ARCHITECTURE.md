@@ -4,11 +4,11 @@
 
 React, en `web/`, es la interfaz principal para el desarrollo futuro. Presenta los flujos de crear imagen, crear video, editar imagen y editar video, además de la galería y los modos sencillo/experto. La generación de imágenes y la galería usan la API local; video y edición son experiencias visuales pendientes de integración y no simulan procesamiento.
 
-La interfaz Gradio de `ui/interface.py` se conserva para compatibilidad y diagnóstico. No comparte navegación ni estado con React y no se modifica en esta iteración.
+La interfaz Gradio de `ui/interface.py` se conserva para compatibilidad y diagnóstico. No comparte navegación ni estado con React. Su flujo de referencia facial ya no persiste la fotografía y la galería excluye también las referencias históricas.
 
 ## Flujo de React y API
 
-En desarrollo, Vite sirve React en `http://localhost:5173` y FastAPI debe estar disponible en `http://localhost:7861`. En producción local, `npm run build` crea `web/dist`; `api/app.py` entrega esos archivos cuando están presentes.
+En desarrollo, `./run_ux.sh` inicia React en `http://127.0.0.1:5173` y FastAPI en `http://127.0.0.1:7861`; `./run.sh` conserva Gradio en `http://127.0.0.1:7860`. Cada servicio también tiene un lanzador individual. Los tres se enlazan a loopback por defecto. En producción local, `npm run build` crea `web/dist`; `api/app.py` entrega esos archivos cuando están presentes.
 
 ```text
 React (web/src)
@@ -27,7 +27,7 @@ React (web/src)
                     └── core/face_reference_pipeline.py
 ```
 
-React no cambia los contratos de la API. El navegador envía descripciones y parámetros existentes; la referencia facial se codifica como Data URL y solo se conserva en memoria durante la sesión. Las preferencias de modo, no los archivos ni los prompts, se guardan en el almacenamiento local del navegador.
+React no cambia las rutas de generación existentes. El navegador envía descripciones y parámetros existentes; la referencia facial se codifica como Data URL, se valida en FastAPI y no se escribe en disco en nuevas solicitudes. Las referencias generadas anteriormente permanecen en el directorio local, sin borrado automático, y el endpoint estático bloquea nombres conocidos de referencia, `prompt.txt` y `metadata.json`. Las preferencias de modo, no los archivos ni los prompts, se guardan en el almacenamiento local del navegador.
 
 La API solo soporta generación de imágenes. El backend limita la resolución a 512 × 512 y el batch a 1; la referencia facial también se procesa a 512 × 512. La selección de orientación en la interfaz no puede superar estos límites. El progreso mostrado proviene del trabajo real, sin porcentajes inventados.
 
@@ -43,6 +43,9 @@ La API solo soporta generación de imágenes. El backend limita la resolución a
 
 - No hay endpoints de API para crear videos, editar imágenes o editar videos; las pantallas correspondientes no envían solicitudes.
 - La UI de edición no modifica ni sobrescribe archivos originales.
-- `api/app.py` expone todo el directorio `outputs/` mediante `/outputs` sin autenticación. La API de generación actual también guarda `reference_face.png` junto a los resultados. La API y esos archivos deben mantenerse en una instalación local confiable; acceso controlado, retención mínima y endurecimiento de privacidad quedan pendientes.
+- `api/app.py` expone imágenes generadas de `outputs/` mediante `/outputs` sin autenticación; no expone archivos de referencia con nombre conocido, `prompt.txt` ni `metadata.json`. Archivos antiguos se conservan en disco, pero no se entregan por las rutas bloqueadas. PNG de resultados pueden contener metadata incrustada y continúan siendo accesibles localmente.
+- Los tamaños máximos configurables son 10 MiB para imágenes y 100 MiB para videos por defecto. Se validan JPEG/PNG/WebP; para el flujo actualmente integrado, FastAPI valida también el contenido de la foto facial. Videos aún no se envían a backend.
+- Loopback reduce exposición de red, pero no sustituye autenticación ni control de acceso local. Cualquier proceso/usuario con acceso al servicio local puede consultar resultados de imagen; no hay expiración o limpieza automatizada.
+- `core/face_reference_pipeline.py` conserva dependencias de assets y rutas de instalación de Forge. No se resuelven en UX v2.1; queda pendiente para la siguiente fase.
 - No se añade telemetría, almacenamiento remoto ni servicio externo. La tipografía y los elementos gráficos usan recursos locales del sistema y CSS.
 - Un futuro flujo de edición requiere un contrato de API propio antes de conectar cualquier procesamiento.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export default function MediaUploader({ accept, kind, onFile, preview, title, description }) {
+export default function MediaUploader({ accept, allowedTypes, maxBytes, kind, onFile, preview, title, description }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -13,8 +13,12 @@ export default function MediaUploader({ accept, kind, onFile, preview, title, de
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!file.type.startsWith(`${kind}/`)) {
-      setError(kind === "image" ? "Elige un archivo de imagen válido." : "Elige un archivo de video válido.");
+    if (!allowedTypes.includes(file.type)) {
+      setError(`Formato no admitido. ${kind === "image" ? "Usa JPEG, PNG o WebP." : "Usa MP4, WebM o MOV."}`);
+      return;
+    }
+    if (file.size > maxBytes) {
+      setError(`El archivo supera el límite de ${formatBytes(maxBytes)}.`);
       return;
     }
     setError("");
@@ -39,4 +43,10 @@ export default function MediaUploader({ accept, kind, onFile, preview, title, de
       {error && <p className="field-error" role="alert">{error}</p>}
     </div>
   );
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${Math.floor(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.floor(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
 }
