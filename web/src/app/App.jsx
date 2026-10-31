@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AdvancedSettings from "../components/AdvancedSettings.jsx";
 import BeforeAfterSlider from "../components/BeforeAfterSlider.jsx";
 import GenerationProgress from "../components/GenerationProgress.jsx";
@@ -62,9 +62,11 @@ function HomePage({ navigate }) {
 
 function CreateImagePage({
   form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job, uploadLimits,
-  mode, models, activeModel, onModelChange, navigate,
+  mode, models, activeModel, onModelChange, navigate, engine, loras, onLoraChange, onRefresh,
 }) {
-  const dimensions = { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
+  const isXL = (engine?.family || activeModel?.family) === "sdxl";
+  const dimensions = isXL ? { portrait: [640, 768], square: [768, 768], landscape: [768, 640] } : { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
+  const availableDimensions = isXL ? (engine?.resolutions || [512, 640, 768]) : [256, 320, 384, 448, 512];
   const faceReference = Boolean(reference);
   const format = faceReference ? "square" :
     Number(form.width) === Number(form.height) ? "square" :
@@ -87,6 +89,12 @@ function CreateImagePage({
       </div>
       <div className="creation-layout">
         <div className="form-card">
+          <div className="notice" aria-live="polite">
+            <strong>Modelo: {engine?.model || activeModel?.label || "No disponible"}</strong>
+            <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Motor: {busy ? "Ocupado" : engine ? "Disponible" : "Desconocido"}</p>
+            <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
+            {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
+          </div>
           <label className="field">
             <span>¿Qué imagen quieres crear?</span>
             <textarea
@@ -117,7 +125,8 @@ function CreateImagePage({
           </fieldset>
           <div className="reference-section">
             <div className="section-label"><strong>Foto de rostro</strong><span>Opcional</span></div>
-            {!reference ? (
+            {isXL && <p className="notice">Face Reference solo admite SD 1.5; todavía no está disponible para SDXL.</p>}
+            {!reference && !isXL ? (
               <MediaUploader
                 accept="image/jpeg,image/png,image/webp"
                 allowedTypes={IMAGE_TYPES}
@@ -127,16 +136,17 @@ function CreateImagePage({
                 description={`JPEG, PNG o WebP · Máximo ${formatUploadLimit(uploadLimits.image_bytes)}`}
                 onFile={onReferenceFile}
               />
-            ) : (
+            ) : reference ? (
               <div className="reference-preview">
                 <img src={reference.dataUrl} alt="Vista previa de la foto de referencia" />
                 <div><strong>{reference.file.name}</strong><span>La foto se usará como referencia, sin prometer una preservación exacta de identidad.</span></div>
                 <button className="text-button" onClick={() => setReference(null)}>Quitar foto</button>
               </div>
-            )}
+            ) : null}
             {faceReference && (
               <p className="notice">Face Reference solo admite formato cuadrado de 512 × 512. La selección de orientación está limitada para coincidir con el resultado.</p>
             )}
+            {faceReference && loras.some((lora) => lora.active) && <p className="notice">Face Reference utiliza otro pipeline y desactiva los LoRA de txt2img.</p>}
           </div>
           {mode === "expert" && (
             <AdvancedSettings
@@ -146,9 +156,14 @@ function CreateImagePage({
               activeModel={activeModel}
               onModelChange={onModelChange}
               faceReference={faceReference}
+              busy={busy}
+              loras={loras}
+              onLoraChange={onLoraChange}
+              onRefresh={onRefresh}
+              dimensions={availableDimensions}
             />
           )}
-          <button className="primary-button" disabled={busy || !form.prompt.trim()} onClick={onGenerate}>
+          <button className="primary-button" disabled={busy || !form.prompt.trim() || (isXL && faceReference)} onClick={onGenerate}>
             {busy ? "Creando imagen…" : "Crear imagen"}
           </button>
           {error && <p className="field-error" role="alert">{error}</p>}
@@ -169,7 +184,7 @@ function CreateImagePage({
           {result && (
             <div className="result-actions">
               <a className="secondary-button" href={outputUrl(result)} download>Descargar imagen</a>
-              <button className="secondary-button" onClick={onGenerate} disabled={busy || !form.prompt.trim()}>Crear otra</button>
+              <button className="secondary-button" onClick={onGenerate} disabled={busy || !form.prompt.trim() || (isXL && faceReference)}>Crear otra</button>
             </div>
           )}
           <GenerationProgress job={job} mode={mode} />
@@ -336,6 +351,10 @@ export default function App() {
   const [form, setForm] = useState(INITIAL_FORM);
   const [reference, setReference] = useState(null);
   const [models, setModels] = useState([]);
+  const [engine, setEngine] = useState(null);
+  const previousFamily = useRef(null);
+  const [loras, setLoras] = useState([]);
+  const [modelBusy, setModelBusy] = useState(false);
   const [uploadLimits, setUploadLimits] = useState(DEFAULT_UPLOAD_LIMITS);
   const [runtime, setRuntime] = useState(null);
   const [history, setHistory] = useState([]);
@@ -364,7 +383,31 @@ export default function App() {
   }, [selectedImage]);
 
   const activeModel = useMemo(() => models.find((model) => model.active), [models]);
-  const busy = job?.status === "queued" || job?.status === "running";
+  const busy = job?.status === "queued" || job?.status === "running" || engine?.status === "busy" || modelBusy;
+
+  useEffect(() => {
+    if (!engine?.family || previousFamily.current === engine.family) return;
+    if (engine.family === "sdxl") {
+      setForm((current) => ({ ...current, width: 768, height: 768 }));
+    } else if (previousFamily.current === "sdxl") {
+      setForm((current) => ({ ...current, width: 512, height: 512 }));
+    }
+    previousFamily.current = engine.family;
+  }, [engine?.family]);
+
+  useEffect(() => {
+    let active = true;
+    let timer;
+    async function poll() {
+      const [state, adapters] = await Promise.allSettled([api("/api/engine"), api("/api/loras")]);
+      if (!active) return;
+      if (state.status === "fulfilled") setEngine(state.value);
+      if (adapters.status === "fulfilled") setLoras(adapters.value);
+      timer = window.setTimeout(poll, 2000);
+    }
+    poll();
+    return () => { active = false; window.clearTimeout(timer); };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -525,16 +568,43 @@ export default function App() {
   }
 
   async function handleModelChange(event) {
+    setModelBusy(true);
     try {
       const nextModels = await api("/api/models/active", {
         method: "POST",
         body: JSON.stringify({ model_id: event.target.value }),
       });
       setModels(nextModels);
+      const selected = nextModels.find((model) => model.active);
+      if (selected) {
+        setEngine((current) => ({ ...current, model: selected.label, family: selected.family, resolutions: selected.family === "sdxl" ? [512, 640, 768] : [256, 320, 384, 448, 512] }));
+        setForm((current) => ({ ...current, width: selected.family === "sdxl" ? 768 : 512, height: selected.family === "sdxl" ? 768 : 512 }));
+        setLoras([]);
+      }
       setMetadataError("");
     } catch (error) {
       setMetadataError(userFacingError(error));
+    } finally {
+      setModelBusy(false);
     }
+  }
+
+  async function refreshCatalog() {
+    setModelBusy(true);
+    try {
+      const [nextModels, nextLoras, nextEngine] = await Promise.all([api("/api/models"), api("/api/loras"), api("/api/engine")]);
+      setModels(nextModels); setLoras(nextLoras); setEngine(nextEngine); setMetadataError("");
+    } catch (error) { setMetadataError(userFacingError(error)); }
+    finally { setModelBusy(false); }
+  }
+
+  async function handleLoraChange(lora, enabled, weight) {
+    setModelBusy(true);
+    try {
+      const next = await api("/api/loras/active", { method: "POST", body: JSON.stringify({ path: lora.value, enabled, weight }) });
+      setLoras(next); setMetadataError("");
+    } catch (error) { setMetadataError(userFacingError(error)); }
+    finally { setModelBusy(false); }
   }
 
   function pageContent() {
@@ -545,6 +615,7 @@ export default function App() {
           form={form} updateField={updateField} reference={reference} setReference={setReference} onReferenceFile={loadReference}
           onGenerate={handleGenerate} busy={busy} error={generationError || pollError} job={job}
           mode={mode} models={models} activeModel={activeModel} onModelChange={handleModelChange} navigate={navigate} uploadLimits={uploadLimits}
+          engine={engine} loras={loras} onLoraChange={handleLoraChange} onRefresh={refreshCatalog}
         />
       );
     }

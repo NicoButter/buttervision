@@ -30,22 +30,18 @@ class ModelManager:
 
     def list_local_model_infos(self) -> List[Dict[str, object]]:
         """Lista modelos locales con nombre, ruta y tamaño."""
+        from core.model_catalog import checkpoint_family, entries
         models = []
-        if self.models_dir.exists():
-            for item in self.models_dir.iterdir():
-                if item.is_dir() and self.is_diffusers_model_dir(item):
-                    models.append({
-                        "name": item.name,
-                        "path": str(item),
-                        "size_bytes": self.get_model_size_bytes(item),
-                    })
-                elif self.is_single_file_model(item):
-                    models.append({
-                        "name": item.stem,
-                        "path": str(item),
-                        "size_bytes": item.stat().st_size,
-                    })
+        for item in entries("checkpoint"):
+            models.append({"name": item.stem if item.is_file() else item.name,
+                           "path": str(item), "size_bytes": self.get_model_size_bytes(item),
+                           "family": checkpoint_family(item)})
         return sorted(models, key=lambda model: str(model["name"]).lower())
+
+    def catalog_checkpoint(self, model_id):
+        from core.model_catalog import approved_path, checkpoint_family
+        path = approved_path(model_id, "checkpoint")
+        return (str(path), checkpoint_family(path)) if path else (None, "unknown")
 
     def _local_name_for_model(self, model_id: str) -> str:
         """Convierte un repo id de Hugging Face en un nombre local estable."""

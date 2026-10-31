@@ -3,6 +3,8 @@ import random
 import threading
 import traceback
 import uuid
+import hashlib
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +19,8 @@ from core.advanced_pipeline import ButterVisionPipeline
 from core.face_reference_pipeline import SD15FaceReferencePipeline
 from core.model_manager import ModelManager
 from core.engine_memory import collect_memory, diagnose, is_memory_error
+from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
+from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
 
 
 class EngineBusyError(RuntimeError):
@@ -84,11 +88,11 @@ class GenerationService:
         self.model_manager = ModelManager()
         active_model = self.model_manager.resolve_model_path(config.model_config.model_id) or config.model_config.model_id
         config.model_config.model_id = active_model
-        self.sd_manager = ButterVisionPipeline(
-            model_id=active_model,
-            enable_optimizations=True,
-            enable_lcm=False,
-        )
+        self.family = checkpoint_family(active_model)
+        self.sd_manager = (SDXLPipeline(active_model) if self.family == SDXL else ButterVisionPipeline(
+            model_id=active_model, enable_optimizations=True, enable_lcm=False,
+        ))
+        self.lora_registry = {}
         self.face_manager: Optional[SD15FaceReferencePipeline] = None
         self.jobs: Dict[str, GenerationJob] = {}
         self.lock = threading.Lock()
@@ -101,23 +105,133 @@ class GenerationService:
         models = []
         for info in model_infos:
             value = info["path"]
-            models.append({"label": Path(value).name, "value": value, "active": value == active})
+            models.append({"label": Path(value).name, "value": value, "active": value == active,
+                           "family": info.get("family", UNKNOWN)})
         if active and all(model["value"] != active for model in models):
-            models.insert(0, {"label": Path(active).name, "value": active, "active": True})
+            models.insert(0, {"label": Path(active).name, "value": active, "active": True, "family": self.family})
         return models
+
+    def resolutions(self):
+        if self.family != SDXL:
+            return [256, 320, 384, 448, 512]
+        import torch
+        if torch.cuda.is_available() and torch.cuda.get_device_properties(0).total_memory >= 8 * 1024**3:
+            return [512, 640, 768, 896, 1024]
+        return [512, 640, 768]
+
+    def engine_state(self):
+        loras = self.list_loras()
+        return {"status": "busy" if self.worker_lock.locked() else "idle",
+                "pipeline": self.active_pipeline, "model": Path(self.sd_manager.model_id).name,
+                "family": self.family, "resolutions": self.resolutions(),
+                "active_loras": [item for item in loras if item["active"]],
+                "face_supported": self.family == SD15}
+
+    def _pipeline(self):
+        return getattr(self.sd_manager, "pipe" if self.family == SDXL else "sd_pipeline", None)
+
+    def _sync_legacy_loras(self):
+        if self.family == SD15:
+            for name, weight in self.sd_manager.loaded_loras.items():
+                path = self.sd_manager.available_loras.get(name)
+                if path and approved_path(path, "lora"):
+                    self.lora_registry.setdefault(str(Path(path).resolve()), {"adapter": name, "weight": weight})
+
+    def list_loras(self):
+        pipeline = self._pipeline()
+        result = []
+        seen = set()
+        for path in entries("lora"):
+            seen.add(str(path))
+            family = lora_family(path)
+            registered = self.lora_registry.get(str(path))
+            compatible = family == self.family and family != UNKNOWN
+            result.append({"value": str(path), "label": path.stem, "family": family,
+                           "compatible": compatible, "active": bool(pipeline is not None and registered),
+                           "weight": registered["weight"] if registered else 1.0,
+                           "reason": "" if compatible else "Familia desconocida o incompatible con el checkpoint activo."})
+        for path, registered in tuple(self.lora_registry.items()):
+            if path not in seen and pipeline is not None:
+                result.append({"value": path, "label": Path(path).stem, "family": self.family,
+                               "compatible": False, "active": True, "weight": registered["weight"],
+                               "reason": "El archivo ya no está disponible; puedes desactivar el adaptador cargado."})
+        return result
+
+    def set_lora(self, path, enabled, weight=1.0):
+        if not self.worker_lock.acquire(blocking=False):
+            raise EngineBusyError()
+        try:
+            item = approved_path(path, "lora")
+            key = str(item) if item is not None else str(Path(path).expanduser().absolute())
+            if item is None and (enabled or key not in self.lora_registry):
+                raise ValueError("LoRA fuera de los directorios registrados o inexistente.")
+            if enabled and (lora_family(item) != self.family or self.family not in (SD15, SDXL)):
+                raise ValueError("LoRA incompatible o de arquitectura desconocida.")
+            weight = float(weight)
+            if not math.isfinite(weight) or not 0 <= weight <= 2:
+                raise ValueError("El peso LoRA debe estar entre 0 y 2.")
+            if not enabled and key not in self.lora_registry:
+                return self.list_loras()
+            if self.family == SDXL and self._pipeline() is None:
+                check_budget(self.sd_manager.model_id)
+            self._release_face()
+            pipe = None
+            try:
+                pipe = (self.sd_manager.load_pipeline() if self.family == SDXL else self.sd_manager.load_sd_pipeline())
+                self.active_pipeline = "txt2img"
+                self._sync_legacy_loras()
+                updated = dict(self.lora_registry)
+                existing = updated.get(key)
+                if enabled:
+                    adapter = existing["adapter"] if existing else "lora_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+                    if not existing:
+                        pipe.load_lora_weights(str(item.parent), weight_name=item.name, adapter_name=adapter, local_files_only=True)
+                    updated[key] = {"adapter": adapter, "weight": weight}
+                elif existing:
+                    pipe.delete_adapters(existing["adapter"])
+                    updated.pop(key)
+                    if self.family == SD15:
+                        self.sd_manager.loaded_loras.pop(existing["adapter"], None)
+                if updated:
+                    pipe.set_adapters([v["adapter"] for v in updated.values()], adapter_weights=[v["weight"] for v in updated.values()])
+                    actual = set(pipe.get_active_adapters())
+                    if not {v["adapter"] for v in updated.values()}.issubset(actual):
+                        raise RuntimeError("Los adaptadores solicitados no quedaron activos.")
+                self.lora_registry = updated
+            except Exception as error:
+                self.lora_registry.clear()
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                del pipe
+                self.sd_manager.cleanup()
+                self.active_pipeline = "none"
+                raise
+            return self.list_loras()
+        finally:
+            self.worker_lock.release()
 
     def set_model(self, model_id: str):
         if not self.worker_lock.acquire(blocking=False):
             raise EngineBusyError()
         try:
             if model_id != self.sd_manager.model_id:
-                resolved = self.model_manager.resolve_model_path(model_id)
-                if not resolved:
-                    raise ValueError("El checkpoint debe estar disponible localmente.")
+                resolved, family = self.model_manager.catalog_checkpoint(model_id)
+                if not resolved or family not in (SD15, SDXL):
+                    raise ValueError("Checkpoint no registrado, incompatible o de arquitectura desconocida.")
                 if resolved != self.sd_manager.model_id:
+                    if family == SDXL and Path(resolved).is_file():
+                        local_sdxl_config(resolved)
                     diagnose("checkpoint_change_start", self.active_pipeline, "busy")
                     self._release_face()
-                    self.sd_manager.change_model(resolved)
+                    if family == self.family == SD15:
+                        self.sd_manager.change_model(resolved)
+                    else:
+                        next_manager = (SDXLPipeline(resolved) if family == SDXL else
+                                        ButterVisionPipeline(model_id=resolved, enable_optimizations=True, enable_lcm=False))
+                        self.sd_manager.cleanup()
+                        self.sd_manager = next_manager
+                    self.family = family
+                    self.lora_registry.clear()
                     self.active_pipeline = "none"
                     config.model_config.model_id = resolved
                     diagnose("checkpoint_change_end", self.active_pipeline, "idle")
@@ -134,6 +248,16 @@ class GenerationService:
             raise EngineBusyError()
         job = None
         try:
+            if self.family not in (SD15, SDXL):
+                raise ValueError("Selecciona un checkpoint SD 1.5 o SDXL compatible.")
+            if mode == "face_reference" and self.family != SD15:
+                raise ValueError("Face Reference solo es compatible con SD 1.5; SDXL aún no tiene backend facial.")
+            if mode == "txt2img" and self.family == SDXL:
+                for dimension in (int(payload.get("width", 768)), int(payload.get("height", 768))):
+                    if dimension not in self.resolutions():
+                        raise ValueError("Resolución SDXL no disponible para este perfil de hardware.")
+                if self._pipeline() is None:
+                    check_budget(self.sd_manager.model_id)
             job = GenerationJob(id=str(uuid.uuid4()), mode=mode, payload=dict(payload))
             with self.lock:
                 self.jobs[job.id] = job
@@ -190,6 +314,7 @@ class GenerationService:
                         self._release_face()
                     finally:
                         self.sd_manager.cleanup()
+                        self.lora_registry.clear()
                         self.active_pipeline = "none"
                 collect_memory()
             except Exception:
@@ -218,13 +343,15 @@ class GenerationService:
         seed = int(payload.get("seed", -1))
         if seed == -1:
             seed = random.randint(0, 2**32 - 1)
+        max_width = max(self.resolutions()) if self.family == SDXL else config.model_config.max_width
+        max_height = max(self.resolutions()) if self.family == SDXL else config.model_config.max_height
         return {
             "prompt": prompt,
             "negative_prompt": negative_prompt,
             "steps": int(payload.get("steps", config.model_config.default_steps)),
             "cfg_scale": float(payload.get("cfg_scale", config.model_config.default_cfg_scale)),
-            "width": max(256, min(int(payload.get("width", config.model_config.default_width)), config.model_config.max_width)),
-            "height": max(256, min(int(payload.get("height", config.model_config.default_height)), config.model_config.max_height)),
+            "width": max(256, min(int(payload.get("width", config.model_config.default_width)), max_width)),
+            "height": max(256, min(int(payload.get("height", config.model_config.default_height)), max_height)),
             "batch_size": max(1, min(int(payload.get("batch_size", 1)), config.model_config.max_batch_size)),
             "seed": seed,
         }
@@ -234,6 +361,11 @@ class GenerationService:
         self._release_face()
         self.active_pipeline = "txt2img"
         job.update(progress=0.2, message="Generating image")
+        if self.family == SD15:
+            # The legacy automatic LoRA may be installed during pipeline load.
+            # Publish it before inference so polling reflects the active state.
+            self.sd_manager.load_sd_pipeline()
+            self._sync_legacy_loras()
         images = self.sd_manager.generate_image(
             prompt=data["prompt"],
             negative_prompt=data["negative_prompt"],
@@ -245,6 +377,7 @@ class GenerationService:
             num_images=data["batch_size"],
             prompt_warning_callback=job.warn,
         )
+        self._sync_legacy_loras()
         paths, generation_dir = self._save_generation(images, {**data, "module": "txt2img", "model": self.sd_manager.model_id})
         info = self._format_info(data, generation_dir)
         job.update(
@@ -269,6 +402,7 @@ class GenerationService:
         job.update(progress=0.15, message="Loading Face Reference")
         if self.active_pipeline != "face_reference":
             self.sd_manager.cleanup()
+            self.lora_registry.clear()
         if self.face_manager is None:
             self.face_manager = SD15FaceReferencePipeline(base_model=self.sd_manager.model_id)
         self.active_pipeline = "face_reference"

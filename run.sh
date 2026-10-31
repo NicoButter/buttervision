@@ -34,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-python -m uvicorn api.app:app --host 127.0.0.1 --port 7861 &
+python -m uvicorn api.app:app --host 127.0.0.1 --port 7861 --workers 1 &
 API_PID=$!
 (cd web && ./node_modules/.bin/vite) &
 WEB_PID=$!

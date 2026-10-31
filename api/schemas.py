@@ -45,6 +45,12 @@ class ModelInfo(BaseModel):
     active: bool = False
 
 
+class LoraUpdate(BaseModel):
+    path: str = Field(min_length=1)
+    enabled: bool
+    weight: float = Field(default=1.0, ge=0, le=2, allow_inf_nan=False)
+
+
 class RuntimeInfo(BaseModel):
     profile: str
     cuda_available: Optional[bool]

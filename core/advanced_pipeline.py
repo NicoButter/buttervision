@@ -272,7 +272,7 @@ class ButterVisionPipeline:
             try:
                 lcm_path = Path("models/lora/defaults/lcm_lora.safetensors")
                 if lcm_path.exists():
-                    pipeline.load_lora_weights(str(lcm_path.parent), weight_name=lcm_path.name)
+                    pipeline.load_lora_weights(str(lcm_path.parent), weight_name=lcm_path.name, local_files_only=True)
                     print("✅ LCM LoRA cargado")
                 else:
                     print("⚠️ LCM LoRA no encontrado")
@@ -284,8 +284,10 @@ class ButterVisionPipeline:
 
         # Cargar automáticamente LoRA de mi_cara si existe
         if "mi_cara" in self.available_loras:
-            print("🎭 Cargando LoRA automático: mi_cara")
-            self.load_lora("mi_cara", weight=0.8)
+            from core.model_catalog import lora_family, SD15
+            if lora_family(self.available_loras["mi_cara"]) == SD15:
+                print("🎭 Cargando LoRA automático: mi_cara")
+                self.load_lora("mi_cara", weight=0.8)
 
         return pipeline
 
@@ -300,6 +302,7 @@ class ButterVisionPipeline:
         motion_adapter = MotionAdapter.from_pretrained(
             self.motion_adapter_id,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+            local_files_only=True,
         )
 
         # Crear pipeline con SD base + motion adapter
@@ -310,6 +313,7 @@ class ButterVisionPipeline:
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
             safety_checker=None,
             cache_dir=str(config.model_config.cache_dir),
+            local_files_only=True,
         )
 
         # Configurar scheduler para videos
@@ -345,9 +349,11 @@ class ButterVisionPipeline:
             if self._is_single_file_model(model_source):
                 pipeline = StableDiffusionImg2ImgPipeline.from_single_file(
                     model_source,
+                    config=local_sd15_config(model_source),
                     torch_dtype=torch_dtype,
                     safety_checker=None,
                     cache_dir=str(config.model_config.cache_dir),
+                    local_files_only=True,
                 )
             else:
                 pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
@@ -356,6 +362,7 @@ class ButterVisionPipeline:
                     safety_checker=None,
                     requires_safety_checker=False,
                     cache_dir=str(config.model_config.cache_dir),
+                    local_files_only=True,
                 )
             pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
             pipeline = self._prepare_pipeline_device(pipeline)
@@ -391,9 +398,11 @@ class ButterVisionPipeline:
                 self.sd_pipeline.load_lora_weights(
                     str(Path(lora_path).parent),
                     weight_name=Path(lora_path).name,
-                    adapter_name=lora_name
+                    adapter_name=lora_name,
+                    local_files_only=True,
                 )
-                self.sd_pipeline.set_adapters([lora_name], adapter_weights=[weight])
+                combined = {**self.loaded_loras, lora_name: weight}
+                self.sd_pipeline.set_adapters(list(combined), adapter_weights=list(combined.values()))
                 print(f"✅ LoRA '{lora_name}' cargado con peso {weight}")
             else:
                 print("⚠️ Pipeline SD no cargado, LoRA se aplicará en próxima carga")

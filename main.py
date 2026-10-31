@@ -198,7 +198,7 @@ def print_system_info():
 
 
 def bootstrap_base_models(skip_download: bool = False):
-    """Descarga o resuelve los modelos base mínimos antes de abrir la UI."""
+    """Resuelve el modelo local sin descargar archivos automáticamente."""
     from core.model_manager import ModelManager
 
     model_id = config.model_config.model_id
@@ -207,7 +207,7 @@ def bootstrap_base_models(skip_download: bool = False):
     model_manager = ModelManager()
     model_path = model_manager.ensure_model(
         model_id=model_id,
-        allow_download=not skip_download,
+        allow_download=False,
     )
 
     config.model_config.model_id = model_path
@@ -231,7 +231,7 @@ def main():
         bootstrap_base_models(skip_download=args.skip_model_download)
     except Exception as e:
         print(f"❌ No se pudo preparar el modelo base: {e}")
-        print("   Revisa tu conexión o ejecuta con un modelo local válido usando --model /ruta/modelo")
+        print("   Ejecuta con un modelo local válido usando --model /ruta/modelo")
         sys.exit(1)
     
     # Crear interfaz

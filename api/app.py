@@ -15,6 +15,7 @@ from api.schemas import (
     JobStatusResponse,
     RuntimeInfo,
     Txt2ImgRequest,
+    LoraUpdate,
 )
 
 
@@ -98,6 +99,21 @@ def set_active_model(payload: dict):
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id requerido")
     return engine_call(get_service().set_model, model_id)
+
+
+@app.get("/api/engine")
+def engine_status():
+    return get_service().engine_state()
+
+
+@app.get("/api/loras")
+def list_loras():
+    return get_service().list_loras()
+
+
+@app.post("/api/loras/active")
+def set_lora(payload: LoraUpdate):
+    return engine_call(get_service().set_lora, payload.path, payload.enabled, payload.weight)
 
 
 @app.post("/api/generate/txt2img", response_model=JobCreateResponse)

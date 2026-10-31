@@ -11,13 +11,16 @@ const runtime = {
   upload_limits: { image_bytes: 10 * 1024 * 1024, video_bytes: 100 * 1024 * 1024 },
 };
 
-function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = [], busyMessage } = {}) {
+function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = [], busyMessage, models = [], engine = null, loras = [] } = {}) {
   globalThis.fetch = vi.fn(async (url, options = {}) => {
     if (url === "/api/runtime") return response({
       ...runtime,
       upload_limits: uploadLimits || runtime.upload_limits,
     });
-    if (url === "/api/models") return response([]);
+    if (url === "/api/models") return response(models);
+    if (url === "/api/engine") return response(engine);
+    if (url === "/api/loras") return response(loras);
+    if (url === "/api/loras/active") return response(loras);
     if (url === "/api/history") return response({ images: history });
     if (url.startsWith("/api/generate/")) {
       if (busyMessage) return { ok: false, status: 409, text: async () => JSON.stringify({ detail: busyMessage }) };
@@ -31,7 +34,7 @@ function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = 
         warnings: jobWarnings,
       });
     }
-    if (url === "/api/models/active") return response([]);
+    if (url === "/api/models/active") return response(models);
     throw new Error(`Unexpected API request: ${url}`);
   });
 }
@@ -55,6 +58,33 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Buttervision UX", () => {
+  it("muestra modelo, familia, LoRA activos y estado del motor", async () => {
+    installApiMock({
+      models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }],
+      engine: { model: "CyberRealistic", family: "sd15", status: "idle" },
+      loras: [{ label: "Retrato", value: "lora", family: "sd15", active: true, compatible: true, weight: 0.8 }],
+    });
+    await openImageCreation();
+    await screen.findByText(/LoRA activos \(1\)/);
+    expect(screen.getByText(/Modelo: CyberRealistic/)).toBeTruthy();
+    expect(screen.getByText(/Familia: SD 1.5 · Motor: Disponible/)).toBeTruthy();
+    expect(screen.getByText(/Retrato/)).toBeTruthy();
+  });
+
+  it("muestra restricciones SDXL y deshabilita cambios con el motor ocupado", async () => {
+    installApiMock({
+      models: [{ label: "Juggernaut", value: "xl", family: "sdxl", active: true }],
+      engine: { model: "Juggernaut", family: "sdxl", status: "busy", resolutions: [512, 640, 768] },
+      loras: [{ label: "SD15", value: "lora", family: "sd15", active: false, compatible: false, reason: "Familia incompatible" }],
+    });
+    await openImageCreation();
+    expect(await screen.findByText(/Face Reference solo admite SD 1.5/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
+    expect(screen.getByLabelText("Modelo / checkpoint").disabled).toBe(true);
+    expect(screen.getByLabelText(/SD15/).disabled).toBe(true);
+    expect(screen.getByText("Familia incompatible")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Actualizar catálogo" }).disabled).toBe(true);
+  });
   it("muestra el rechazo del motor ocupado enviado por la API", async () => {
     const busyMessage = "El motor está ocupado generando o cambiando de modelo.";
     installApiMock({ busyMessage });

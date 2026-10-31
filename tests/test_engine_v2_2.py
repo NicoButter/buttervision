@@ -89,10 +89,14 @@ class ServiceTests(OfflineTests):
     def setUp(self):
         super().setUp()
         self.sd = Mock(model_id="model.safetensors")
+        self.sd.loaded_loras = {}
+        self.sd.available_loras = {}
+        self.sd.sd_pipeline = None
         self.models = Mock()
         self.models.resolve_model_path.side_effect = lambda value: value
         self.models.list_local_model_infos.return_value = []
-        with patch("api.generation.ButterVisionPipeline", return_value=self.sd), patch("api.generation.ModelManager", return_value=self.models):
+        self.models.catalog_checkpoint.side_effect = lambda value: (value, "sd15")
+        with patch("api.generation.ButterVisionPipeline", return_value=self.sd), patch("api.generation.ModelManager", return_value=self.models), patch("api.generation.checkpoint_family", return_value="sd15"):
             self.engine = GenerationService()
         self.saves = patch.object(self.engine, "_save_generation", return_value=([], config.OUTPUTS_DIR / "mock"))
         self.saves.start()
@@ -221,8 +225,8 @@ class ServiceTests(OfflineTests):
         self.assertEqual(response.json()["status"], "completed")
 
     def test_missing_checkpoint_preserves_current_model(self):
-        self.models.resolve_model_path.return_value = None
-        self.models.resolve_model_path.side_effect = None
+        self.models.catalog_checkpoint.side_effect = None
+        self.models.catalog_checkpoint.return_value = (None, "unknown")
         with self.assertRaises(ValueError):
             self.engine.set_model("missing")
         self.sd.change_model.assert_not_called()
