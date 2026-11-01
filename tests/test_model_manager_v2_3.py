@@ -658,6 +658,37 @@ class BackendTests(OfflineFixture):
         self.assertEqual(pipe.call_args.kwargs["prompt_2"], "a b")
         self.assertEqual(len(warnings), 2)
 
+    def test_local_forge_sdxl_configuration_and_explicit_precedence(self):
+        forge = self.root / "stable-diffusion-webui-forge"
+        local = forge / "backend/huggingface/stabilityai/stable-diffusion-xl-base-1.0"
+        files = {
+            "model_index.json": '{"_class_name": "StableDiffusionXLPipeline"}',
+            "unet/config.json": '{"cross_attention_dim": 2048}',
+        }
+        for name in ("text_encoder_2/config.json", "tokenizer_2/tokenizer_config.json",
+                     "scheduler/scheduler_config.json", "vae/config.json", "text_encoder/config.json",
+                     "tokenizer/tokenizer_config.json", "tokenizer/vocab.json", "tokenizer/merges.txt",
+                     "tokenizer_2/vocab.json", "tokenizer_2/merges.txt"):
+            files[name] = "{}"
+        for name, content in files.items():
+            target = local / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        with patch.object(Path, "home", return_value=self.root), patch.dict(os.environ, {
+            "BUTTERVISION_SDXL_CONFIG": "", "BUTTERVISION_FORGE_HOME": "",
+        }), patch("core.sdxl_pipeline.try_to_load_from_cache", return_value=None):
+            self.assertEqual(local_sdxl_config(self.xl), str(local))
+            explicit = self.root / "explicit"
+            for name, content in files.items():
+                target = explicit / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+            with patch.dict(os.environ, {"BUTTERVISION_SDXL_CONFIG": str(explicit)}):
+                self.assertEqual(local_sdxl_config(self.xl), str(explicit))
+            (local / "unet/config.json").write_text('{"cross_attention_dim": 768}')
+            with self.assertRaisesRegex(ValueError, "SDXL"):
+                local_sdxl_config(self.xl)
+
     def test_sdxl_configuration_does_not_accept_sd15(self):
         with patch.dict(os.environ, {"BUTTERVISION_SDXL_CONFIG": str(self.root / "missing")}), patch("core.sdxl_pipeline.try_to_load_from_cache", return_value=None):
             with self.assertRaisesRegex(ValueError, "SDXL"):

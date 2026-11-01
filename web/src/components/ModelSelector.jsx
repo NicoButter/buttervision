@@ -16,6 +16,15 @@ export default function ModelSelector({ models, activeModel, busy, onChange, onR
   const selected = activeModel || models.find((model) => model.active);
   const previousFamily = selected?.family;
   const modelState = engine?.model_state || selected?.state || "selected";
+  if (compact) return (
+    <section className="model-selector model-selector-compact" aria-label="Modelo">
+      <select aria-label="Checkpoint registrado" value={selected?.value || ""} onChange={(event) => onChange(event, previousFamily)} disabled={busy || engine?.status === "busy"}>
+        {!models.length && <option value="">No hay modelos registrados</option>}
+        {models.map((model) => <option key={model.value} value={model.value} disabled={model.family === "unknown"}>{model.label}</option>)}
+      </select>
+      {error && <p className="field-error" role="alert">{error}</p>}
+    </section>
+  );
   return (
     <section className={`model-selector${compact ? " model-selector-compact" : ""}`} aria-labelledby="model-selector-title">
       <div className="section-label"><strong id="model-selector-title">Modelo</strong><span>{busy ? "Actualizando…" : "Catálogo local"}</span></div>

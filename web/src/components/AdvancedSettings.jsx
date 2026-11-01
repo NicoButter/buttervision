@@ -53,10 +53,6 @@ export default function AdvancedSettings({ form, updateField, faceReference, bus
             <NumberField label="Fuerza de estructura" name="structure_strength" value={form.structure_strength} min={0} max={1.5} step={0.05} onChange={updateField} />
           </>
         )}
-        <label className="field field-wide">
-          <span>Prompt negativo</span>
-          <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
-        </label>
       </div>
       <p className="muted small">
         {faceReference ? "Face Reference solo admite formato cuadrado de 512 × 512." : `Resoluciones disponibles para este perfil: ${dimensions.join(", ")} px. Batch máximo: 1.`}

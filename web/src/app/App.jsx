@@ -144,13 +144,6 @@ function CreateImagePage({
               <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
             </label>
           </details>
-          <details className="negative-prompt">
-            <summary>Prompt negativo (opcional)</summary>
-            <label className="field">
-              <span>Qué quieres evitar en la imagen</span>
-              <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
-            </label>
-          </details>
           <fieldset className="format-options">
             <legend>Formato</legend>
             {[

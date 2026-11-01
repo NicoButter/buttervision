@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
+import ModelSelector from "../components/ModelSelector.jsx";
 import BeforeAfterSlider from "../components/BeforeAfterSlider.jsx";
 
 const runtime = {
@@ -78,8 +79,7 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
     await screen.findByText(/LoRA activos \(1\)/);
-    expect(screen.getByText("CyberRealistic", { selector: ".model-active strong" })).toBeTruthy();
-    expect(screen.getByText("SD 1.5 · Seleccionado · pendiente de carga")).toBeTruthy();
+    expect(screen.getByRole("option", { name: "CyberRealistic" }).selected).toBe(true);
     expect(screen.getAllByText(/Retrato/).length).toBeGreaterThan(0);
   });
 
@@ -90,6 +90,10 @@ describe("Buttervision UX", () => {
     expect(screen.getByRole("banner").querySelector("select")).toBeTruthy();
     expect(screen.queryByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeNull();
     expect(screen.queryByText("Modelo de imagen")).toBeNull();
+    const selector = screen.getByRole("banner").querySelector(".model-selector");
+    expect(selector.children.length).toBe(1);
+    expect(selector.firstElementChild.tagName).toBe("SELECT");
+    expect(selector.textContent).toBe("CyberRealistic");
   });
 
   it("muestra cada estado del checkpoint sin llamar listo al seleccionado", async () => {
@@ -124,12 +128,11 @@ describe("Buttervision UX", () => {
     expect(screen.getByText(/No hay margen suficiente/)).toBeTruthy();
   });
 
-  it("actualiza el catálogo desde el endpoint registrado", async () => {
-    installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
-    await openImageCreation();
-    const before = globalThis.fetch.mock.calls.filter(([url]) => url === "/api/models").length;
+  it("conserva actualizar catálogo en la presentación no compacta", () => {
+    const refresh = vi.fn();
+    render(<ModelSelector models={[]} onRefresh={refresh} />);
     fireEvent.click(screen.getByRole("button", { name: "Actualizar catálogo" }));
-    await waitFor(() => expect(globalThis.fetch.mock.calls.filter(([url]) => url === "/api/models").length).toBeGreaterThan(before));
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("expone los estados PIZARRA usando solo la respuesta del backend", async () => {
@@ -182,7 +185,7 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "xl" } });
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "El motor está ocupado. Espera a que termine la generación para cambiar de modelo.");
-    expect(screen.getByText("CyberRealistic", { selector: "strong" })).toBeTruthy();
+    expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
   });
 
   it("permite volver de SDXL a SD 1.5 y bloquea familias desconocidas", async () => {
@@ -198,7 +201,7 @@ describe("Buttervision UX", () => {
     expect(screen.getByRole("option", { name: /Checkpoint sin identificar/ }).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Checkpoint registrado"), { target: { value: "cyber" } });
     await waitFor(() => expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber"));
-    expect(await screen.findByText(/Face Reference solo admite SD 1.5/)).toBeTruthy();
+    expect(screen.getByRole("option", { name: "CyberRealistic" }).selected).toBe(true);
   });
 
   it("conserva checkpoint ante HTTP 400 y muestra el motivo del backend", async () => {
@@ -221,7 +224,7 @@ describe("Buttervision UX", () => {
     expect(screen.getByLabelText("Checkpoint registrado").disabled).toBe(true);
     expect(screen.getByLabelText(/SD15/).disabled).toBe(true);
     expect(screen.getByText("Familia incompatible")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Actualizar catálogo" }).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Actualizar catálogo" })).toBeNull();
   });
   it("muestra el rechazo del motor ocupado enviado por la API", async () => {
     const busyMessage = "El motor está ocupado generando o cambiando de modelo.";
@@ -281,6 +284,25 @@ describe("Buttervision UX", () => {
     fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
     expect(screen.getByLabelText("¿Qué imagen quieres crear?").value).toBe("Un jardín al atardecer");
     expect(screen.getByText("Parámetros del modo experto")).toBeTruthy();
+  });
+
+  it("mantiene un único negativo entre modos y lo envía sin cambios", async () => {
+    const onGenerate = vi.fn();
+    installApiMock({ onGenerate });
+    await openImageCreation();
+    const label = "Qué quieres evitar en la imagen";
+    expect(screen.getAllByLabelText(label).length).toBe(1);
+    fireEvent.change(screen.getByLabelText(label), { target: { value: "borroso, texto" } });
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(screen.getByRole("button", { name: /Modo experto/ }));
+      expect(document.querySelectorAll(".form-card textarea").length).toBe(2);
+      expect(screen.getAllByLabelText(label).length).toBe(1);
+      expect(screen.getByLabelText(label).value).toBe("borroso, texto");
+    }
+    fireEvent.change(screen.getByLabelText("¿Qué imagen quieres crear?"), { target: { value: "Un paisaje" } });
+    fireEvent.click(screen.getByRole("button", { name: "Crear imagen" }));
+    await waitFor(() => expect(onGenerate).toHaveBeenCalled());
+    expect(onGenerate.mock.calls[0][1].negative_prompt).toBe("borroso, texto");
   });
 
   it("envía la creación sin referencia al endpoint txt2img con formato elegido", async () => {

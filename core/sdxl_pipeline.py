@@ -26,6 +26,15 @@ def local_sdxl_config(checkpoint):
         index = try_to_load_from_cache("stabilityai/stable-diffusion-xl-base-1.0", "model_index.json", cache_dir=cache)
         if isinstance(index, str):
             candidates.append(Path(index).parent)
+    forge_roots = [Path.home() / "stable-diffusion-webui-forge",
+                   Path.home() / "proyectos_2024/stable-diffusion-webui-forge"]
+    configured_forge = os.environ.get("BUTTERVISION_FORGE_HOME", "").strip()
+    if configured_forge:
+        forge_roots.insert(0, Path(configured_forge).expanduser())
+    candidates += [forge / "backend/huggingface/stabilityai/stable-diffusion-xl-base-1.0"
+                   for forge in forge_roots]
+    if os.environ.get("BUTTERVISION_SDXL_CONFIG"):
+        candidates = candidates[:1]
     from core.model_catalog import checkpoint_family, SDXL
     for candidate in candidates:
         if checkpoint_family(candidate) == SDXL and all((candidate / name).is_file() for name in (
