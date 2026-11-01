@@ -2,6 +2,21 @@
 
 The default invocation is informational and never loads a model. The worker is
 intended only for manual hardware validation, not API requests or automated tests.
+
+One Fedora acceptance run (GTX 1650 4 GB / 16 GB RAM), from the repository:
+    venv/bin/python scripts/sdxl_isolated_probe.py --execute --load-only \
+        --model "$HOME/stable-diffusion-webui-forge/models/Stable-diffusion/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors" \
+        --strategy LOW_RAM --memory-max-gib 10 --timeout-seconds 3600
+
+Uses the existing local Forge configuration, never downloads. Requires configured
+CPU offload as existing probes do. Exit 0 requires all four weight components,
+both tokenizers and scheduler, exact shapes and zero meta parameters/buffers.
+JSON records contain per-component/read/conversion/total times, loaded counts,
+observed RSS/cgroup/CUDA allocator peaks (null if unavailable), and release.
+Read time covers mapping/get_tensor; demand-page I/O during copy is included in
+conversion time. Peaks are observed per tensor, not a claim of continuous hardware
+sampling. The existing supervisor additionally samples process-tree RSS.
+A successful tiny fixture or header plan is not physical Juggernaut acceptance.
 """
 import argparse
 import json
@@ -29,7 +44,7 @@ from core.inference_lock import acquire_inference_lock, release_inference_lock
 def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_seconds=3600,
                         python_executable=sys.executable, systemd_run="systemd-run", timeout_executable="timeout",
                         strategy="AUTO", disk_offload_dir=None, pizarra_adapter=False,
-                        pizarra_strategy="AUTO"):
+                        pizarra_strategy="AUTO", load_only=False):
     """Build, but do not run, a bounded local systemd user scope command."""
     from core.model_catalog import SDXL, approved_path, checkpoint_family
 
@@ -56,6 +71,10 @@ def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_se
         python_executable, str(Path(__file__).resolve()), "--worker", "--model", str(approved),
         "--timeout-seconds", str(int(timeout_seconds)), "--strategy", strategy,
     ]
+    if load_only:
+        if pizarra_adapter or strategy == "DISK_OFFLOAD":
+            raise ValueError("--load-only no se combina con PIZARRA ni offload HDD")
+        command.append("--load-only")
     if disk_offload_dir is not None:
         command.insert(7, f"--setenv=BUTTERVISION_SDXL_DISK_OFFLOAD_DIR={disk_offload_dir}")
     if pizarra_adapter:
@@ -64,7 +83,7 @@ def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_se
     return command
 
 
-def _worker(model, timeout_seconds, strategy="AUTO", pizarra_adapter=False, pizarra_strategy="AUTO"):
+def _worker(model, timeout_seconds, strategy="AUTO", pizarra_adapter=False, pizarra_strategy="AUTO", load_only=False):
     from core.model_catalog import SDXL, approved_path, checkpoint_family
     from core.sdxl_pipeline import SDXLPipeline, local_sdxl_config
     import config
@@ -80,6 +99,35 @@ def _worker(model, timeout_seconds, strategy="AUTO", pizarra_adapter=False, piza
     if pizarra_adapter and strategy == "DISK_OFFLOAD":
         raise SystemExit("El adaptador PIZARRA bloquea el offload a disco no administrado por su almacenamiento.")
     start = time.monotonic()
+    if load_only:
+        from core.sdxl_pipeline import check_budget
+        from core.sdxl_progressive_loader import load_progressive, assert_initialized
+        import gc
+        pipe = None
+        try:
+            plan = check_budget(approved, requested=strategy)
+            if not plan.get("progressive_load"):
+                raise ValueError("El checkpoint no admite carga progresiva")
+            pipe = load_progressive(approved, local_sdxl_config(approved), dtype=torch.float16,
+                                    report=lambda record: print(json.dumps(record), flush=True))
+            assert_initialized({name: getattr(pipe, name) for name in
+                                ("unet", "vae", "text_encoder", "text_encoder_2")})
+            if any(getattr(pipe, name, None) is None for name in
+                   ("tokenizer", "tokenizer_2", "scheduler")):
+                raise ValueError("Pipeline auxiliar incompleto")
+            print(json.dumps({"status": "loaded", **pipe.progressive_load_metrics}), flush=True)
+            return 0
+        except Exception as error:
+            print(json.dumps({"status": "failed", "error_type": type(error).__name__,
+                              "reason": str(error)}), file=sys.stderr, flush=True)
+            return 1
+        finally:
+            pipe = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(json.dumps({"event": "sdxl_progressive_load", "phase": "released",
+                              "rss_bytes": psutil.Process().memory_info().rss,
+                              "seconds": time.monotonic() - start}), flush=True)
     if pizarra_adapter:
         from core.pizarra.config import PizarraConfig
         from core.pizarra.storage import PizarraStorage
@@ -178,15 +226,18 @@ def main(argv=None):
     parser.add_argument("--pizarra-strategy", default="AUTO",
                         choices=("AUTO", "STANDARD", "CPU_OFFLOAD", "DISK_OFFLOAD_EXPERIMENTAL"),
                         type=str.upper, help="Estrategia del adaptador PIZARRA; el offload HDD está bloqueado")
+    parser.add_argument("--load-only", action="store_true", help="Opt-in: cargar SDXL completo sin inferencia ni imágenes")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.load_only and (args.pizarra_adapter or args.strategy == "DISK_OFFLOAD"):
+        parser.error("--load-only requiere el cargador SDXL sin PIZARRA ni HDD")
     if args.pizarra_adapter and args.strategy == "DISK_OFFLOAD":
         parser.error("--pizarra-adapter no se combina con --strategy DISK_OFFLOAD; el HDD no tiene una concesión segura.")
     if args.worker:
         if not args.model:
             parser.error("--model requerido")
         return _worker(args.model, args.timeout_seconds, args.strategy,
-                       args.pizarra_adapter, args.pizarra_strategy)
+                       args.pizarra_adapter, args.pizarra_strategy, args.load_only)
     if not args.execute:
         print("Sin inferencia. Para iniciar la única prueba controlada: añade --execute --model RUTA_LOCAL_REGISTRADA.")
         return 0
@@ -204,8 +255,9 @@ def main(argv=None):
                                   python_executable=sys.executable, systemd_run=executable,
                                   timeout_executable=timeout_executable, strategy=args.strategy,
                                   pizarra_adapter=args.pizarra_adapter,
-                                  pizarra_strategy=args.pizarra_strategy)
-    print("Iniciando prueba SDXL 512×512, 10 pasos, lote 1 en scope systemd limitado.", flush=True)
+                                  pizarra_strategy=args.pizarra_strategy, **({"load_only": True} if args.load_only else {}))
+    print("Iniciando carga SDXL sin inferencia en scope limitado." if args.load_only else
+          "Iniciando prueba SDXL 512×512, 10 pasos, lote 1 en scope systemd limitado.", flush=True)
     inference_fd = acquire_inference_lock()
     if inference_fd is None:
         raise SystemExit("Ya hay una carga o inferencia activa en Buttervision; la prueba aislada no se iniciará.")

@@ -138,7 +138,7 @@ def collect_resources():
     }
 
 
-def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experimental_disk=False):
+def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experimental_disk=False, progressive=None):
     """Return a strategy plan. No profile is admitted by changing thresholds alone."""
     requested = str(requested or "AUTO").upper()
     if requested not in PROFILES:
@@ -154,6 +154,11 @@ def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experi
            and bool(resources.get("cpu_offload_configured", True)))
     standard_ram = 2 * size + STANDARD_RAM_HEADROOM
     low_ram = size + LOW_RAM_HEADROOM
+    if progressive is not None:
+        # Final CPU weights + bounded conversion workspace + unchanged headroom.
+        # Inference VRAM requirements below remain independent of loading.
+        standard_ram = low_ram = (progressive["resident_bytes"] +
+                                  progressive["temporary_bytes"] + LOW_RAM_HEADROOM)
     standard_vram = size + STANDARD_RAM_HEADROOM
     disk = resources.get("disk") or {}
     disk_required = int(size * 1.25 + GIB)
@@ -167,6 +172,7 @@ def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experi
         (cuda and ram >= standard_ram and vram is not None and vram >= standard_vram)
         or (not cuda and ram >= standard_ram)
     )
+    standard_viable = standard_viable and (progressive is None or accelerate)
     low_ram_viable = bool(cuda and low_cpu and mmap and ram >= low_ram and
                           (vram is not None and vram >= standard_vram or seq and vram is not None and vram >= SEQUENTIAL_OFFLOAD_MIN_VRAM))
     low_vram_viable = bool(cuda and seq and vram is not None and vram >= SEQUENTIAL_OFFLOAD_MIN_VRAM and ram >= low_ram)
@@ -196,7 +202,9 @@ def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experi
         if not accelerate:
             reasons.append("Accelerate no está disponible para inicialización de bajo uso de RAM y offload.")
         if ram < low_ram:
-            reasons.append("La RAM disponible no alcanza el mínimo estimado para cargar los pesos en mmap con margen.")
+            reasons.append("La RAM disponible no alcanza pesos residentes + buffer + margen de carga progresiva."
+                           if progressive is not None else
+                           "La RAM disponible no alcanza el mínimo estimado para cargar los pesos en mmap con margen.")
         if cuda and (vram is None or vram < SEQUENTIAL_OFFLOAD_MIN_VRAM):
             reasons.append("La VRAM es menor que el mínimo medido para offload secuencial.")
         if requested == "DISK_OFFLOAD" and not disk_viable:
@@ -209,6 +217,9 @@ def plan_strategy(checkpoint_bytes, resources, requested="AUTO", *, allow_experi
         elif requested in ("LOW_RAM", "LOW_VRAM") and ram >= low_ram and not (low_ram_viable if requested == "LOW_RAM" else low_vram_viable):
             reasons.append(f"La combinación de recursos no admite el perfil {requested}.")
     return {
+        "progressive_load": progressive is not None,
+        "progressive_resident_bytes": progressive["resident_bytes"] if progressive else None,
+        "progressive_temporary_bytes": progressive["temporary_bytes"] if progressive else None,
         "requested_profile": requested,
         "selected_profile": selected,
         "admitted": selected is not None,

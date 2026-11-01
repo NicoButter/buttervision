@@ -69,7 +69,13 @@ def inspect_load_budget(model, requested="AUTO", *, allow_experimental_disk=Fals
         raise ValueError("No se encontraron pesos safetensors locales para SDXL.")
     resources = collect_resources()
     resources["ram_available_bytes"] = available_ram()
-    assessment = plan_strategy(size, resources, requested, allow_experimental_disk=allow_experimental_disk)
+    from core.sdxl_progressive_loader import progressive_estimate
+    source = Path(model)
+    progressive = (progressive_estimate(source, torch.float16 if resources["cuda_available"] else torch.float32)
+                   if str(requested).upper() != "DISK_OFFLOAD" and source.is_file() and
+                   source.suffix.lower() == ".safetensors" else None)
+    assessment = plan_strategy(size, resources, requested, allow_experimental_disk=allow_experimental_disk,
+                               progressive=progressive)
     assessment.update({
         "strategy": assessment["selected_profile"],
         "estimated_required_ram_bytes": assessment["ram_low_required_bytes"],
@@ -133,7 +139,10 @@ class SDXLPipeline:
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         low_cpu = plan["selected_profile"] != "STANDARD"
         source = Path(self.model_id)
-        if source.is_file():
+        if source.is_file() and plan.get("progressive_load"):
+            from core.sdxl_progressive_loader import load_progressive
+            pipe = load_progressive(source, local_sdxl_config(source), dtype=dtype)
+        elif source.is_file():
             pipe = StableDiffusionXLPipeline.from_single_file(
                 str(source), config=local_sdxl_config(source), torch_dtype=dtype,
                 local_files_only=True, low_cpu_mem_usage=low_cpu, disable_mmap=False,

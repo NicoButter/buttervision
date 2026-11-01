@@ -465,7 +465,9 @@ class BackendTests(OfflineFixture):
         with patch("core.sdxl_pipeline.collect_resources", return_value=resources), patch("core.sdxl_pipeline.available_ram", return_value=16 * 1024**3):
             budget = inspect_load_budget(self.xl)
         self.assertTrue(budget["admitted"])
-        self.assertEqual(budget["ram_low_required_bytes"], self.xl.stat().st_size + 2 * 1024**3)
+        self.assertTrue(budget["progressive_load"])
+        self.assertEqual(budget["ram_low_required_bytes"], budget["progressive_resident_bytes"] +
+                         budget["progressive_temporary_bytes"] + 2 * 1024**3)
         self.assertTrue(budget["low_cpu_mem_usage_available"])
         self.assertEqual(budget["ram_process_rss_bytes"], 512 * 1024**2)
         self.assertEqual(budget["selected_profile"], "STANDARD")
