@@ -83,6 +83,10 @@ class StorageTests(unittest.TestCase):
         ref = self.storage.commit(self.job, "tensors", "tensor.bin", b"small tensor")
         self.assertEqual(ref, "tensors/tensor.bin")
         self.assertEqual(self.storage.read(self.job, ref), b"small tensor")
+        counters = self.storage.stats()
+        self.assertGreater(counters["metadata_written_bytes"], 0)
+        self.assertGreater(counters["tensor_written_bytes"], 0)
+        self.assertGreater(counters["tensor_read_bytes"], 0)
         state = self.storage.stats()
         self.assertTrue(state["available"])
         self.assertGreater(state["read_bytes"], 0)
@@ -200,8 +204,15 @@ class StorageTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_auto_requires_recognized_authorization(self):
+        env = {"BUTTERVISION_PIZARRA_MODE": "AUTO", "BUTTERVISION_PIZARRA_ENABLED": "AUTO"}
+        with patch.dict(os.environ, env, clear=True), patch("core.pizarra.config._auto_authorized", return_value=False):
+            self.assertFalse(PizarraConfig.from_env().enabled)
+        with patch.dict(os.environ, env, clear=True), patch("core.pizarra.config._auto_authorized", return_value=True):
+            self.assertTrue(PizarraConfig.from_env().enabled)
+
     def test_defaults_and_parsing(self):
-        with patch.dict(os.environ, {}, clear=True):
+        with patch("core.pizarra.config._auto_authorized", return_value=False), patch.dict(os.environ, {}, clear=True):
             cfg = PizarraConfig.from_env()
         self.assertFalse(cfg.enabled)
         self.assertEqual(cfg.root, Path("/mnt/pizarra"))

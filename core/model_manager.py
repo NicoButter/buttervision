@@ -30,12 +30,12 @@ class ModelManager:
 
     def list_local_model_infos(self) -> List[Dict[str, object]]:
         """Lista modelos locales con nombre, ruta y tamaño."""
-        from core.model_catalog import checkpoint_family, entries
+        from core.model_catalog import checkpoint_family, entries, origin
         models = []
         for item in entries("checkpoint"):
             models.append({"name": item.stem if item.is_file() else item.name,
                            "path": str(item), "size_bytes": self.get_model_size_bytes(item),
-                           "family": checkpoint_family(item)})
+                           "family": checkpoint_family(item), "origin": origin(item)})
         return sorted(models, key=lambda model: str(model["name"]).lower())
 
     def catalog_checkpoint(self, model_id):

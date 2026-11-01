@@ -15,6 +15,25 @@ def _boolean(name, default):
     raise ValueError(f"{name} debe ser true o false")
 
 
+def _auto_authorized(root, volume_uuid):
+    """Recognize only a separately mounted volume with a configured UUID or our marker."""
+    try:
+        from .storage import _LOCK_MAGIC, _LOCK_NAME, _mount_identity, _uuid_device
+        identity = _mount_identity(root)
+        root_identity = _mount_identity(Path("/"))
+        if identity[1] == root_identity[1]:
+            return False
+        device = os.stat(root).st_dev
+        if identity[1] != f"{os.major(device)}:{os.minor(device)}":
+            return False
+        if volume_uuid:
+            return _uuid_device(volume_uuid) == device
+        marker = Path(root) / _LOCK_NAME
+        return marker.is_file() and not marker.is_symlink() and marker.read_bytes() == _LOCK_MAGIC
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+
 def _bytes(name, default, *, positive=False):
     try:
         value = float(os.environ.get(name, str(default)))
@@ -44,12 +63,22 @@ class PizarraConfig:
 
     @classmethod
     def from_env(cls):
-        enabled = _boolean("BUTTERVISION_PIZARRA_ENABLED", False)
+        mode = os.environ.get("BUTTERVISION_PIZARRA_MODE", "AUTO").strip().upper()
+        if mode not in ("AUTO", "ON", "OFF"):
+            raise ValueError("BUTTERVISION_PIZARRA_MODE debe ser AUTO, ON u OFF")
+        explicit = os.environ.get("BUTTERVISION_PIZARRA_ENABLED", "AUTO").strip().upper()
+        if explicit not in ("AUTO", "TRUE", "FALSE", "1", "0", "ON", "OFF", "YES", "NO"):
+            raise ValueError("BUTTERVISION_PIZARRA_ENABLED debe ser AUTO o true/false")
+        uuid = os.environ.get("BUTTERVISION_PIZARRA_VOLUME_UUID", "").strip()
+        root = Path(os.environ.get("BUTTERVISION_PIZARRA_ROOT", "/mnt/pizarra")).expanduser()
+        enabled = (explicit in ("TRUE", "1", "ON", "YES") or
+                   (explicit == "AUTO" and mode != "OFF" and (bool(uuid) or _auto_authorized(root, uuid))))
+        if mode == "OFF" or explicit in ("FALSE", "0", "OFF", "NO"):
+            enabled = False
         if not enabled:
             # The disabled feature must not interfere with legacy startup even
             # if stale PIZARRA environment values are malformed.
             return cls(enabled=False)
-        root = Path(os.environ.get("BUTTERVISION_PIZARRA_ROOT", "/mnt/pizarra")).expanduser()
         if not root.is_absolute():
             raise ValueError("BUTTERVISION_PIZARRA_ROOT debe ser una ruta absoluta")
         return cls(
@@ -58,5 +87,5 @@ class PizarraConfig:
             quota_bytes=_bytes("BUTTERVISION_PIZARRA_QUOTA_GB", 400, positive=True),
             min_free_bytes=_bytes("BUTTERVISION_PIZARRA_MIN_FREE_GB", 20),
             metrics_enabled=_boolean("BUTTERVISION_PIZARRA_METRICS_ENABLED", True),
-            volume_uuid=os.environ.get("BUTTERVISION_PIZARRA_VOLUME_UUID", "").strip(),
+            volume_uuid=uuid,
         )

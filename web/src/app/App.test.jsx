@@ -22,7 +22,7 @@ function installApiMock({ history = [], onGenerate, uploadLimits, jobWarnings = 
     });
     if (url === "/api/models") return response(currentModels);
     if (url === "/api/engine") return response(currentEngine);
-    if (url === "/api/pizarra/status") return response(pizarra);
+    if (url.startsWith("/api/pizarra/status")) return response(pizarra);
     if (url === "/api/loras/active") return response(currentLoras);
     if (url === "/api/history") return response({ images: history });
     if (url.startsWith("/api/generate/")) {
@@ -78,17 +78,18 @@ describe("Buttervision UX", () => {
     await openImageCreation();
     fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
     await screen.findByText(/LoRA activos \(1\)/);
-    expect(screen.getByText(/Modelo: CyberRealistic/)).toBeTruthy();
-    expect(screen.getByText(/Familia: SD 1.5 · Estado del modelo: Seleccionado · pendiente de carga/)).toBeTruthy();
+    expect(screen.getByText("CyberRealistic", { selector: ".model-active strong" })).toBeTruthy();
+    expect(screen.getByText("SD 1.5 · Seleccionado · pendiente de carga")).toBeTruthy();
     expect(screen.getAllByText(/Retrato/).length).toBeGreaterThan(0);
   });
 
-  it("muestra el selector de modelo en modo simple y avisa cuando solo hay un registrado", async () => {
+  it("mantiene el selector global en modo simple sin exponer rutas técnicas", async () => {
     installApiMock({ models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
     await openImageCreation();
     expect(screen.getByLabelText("Checkpoint registrado").value).toBe("cyber");
-    expect(screen.getByText("Estado: Seleccionado")).toBeTruthy();
+    expect(screen.getByRole("banner").querySelector("select")).toBeTruthy();
     expect(screen.queryByText(/BUTTERVISION_CHECKPOINT_DIRS/)).toBeNull();
+    expect(screen.queryByText("Modelo de imagen")).toBeNull();
   });
 
   it("muestra cada estado del checkpoint sin llamar listo al seleccionado", async () => {
@@ -147,7 +148,7 @@ describe("Buttervision UX", () => {
   it("distingue backend PIZARRA desconectado como estado desconocido", async () => {
     installApiMock();
     const original = globalThis.fetch;
-    globalThis.fetch = vi.fn(async (url, options) => url === "/api/pizarra/status" ? Promise.reject(new Error("offline")) : original(url, options));
+    globalThis.fetch = vi.fn(async (url, options) => url.startsWith("/api/pizarra/status") ? Promise.reject(new Error("offline")) : original(url, options));
     render(<App />);
     expect(await screen.findByText("PIZARRA: Desconocido")).toBeTruthy();
   });

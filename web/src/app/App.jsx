@@ -83,7 +83,7 @@ function HomePage({ navigate }) {
 
 function CreateImagePage({
   form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job, uploadLimits,
-  mode, models, activeModel, onModelChange, navigate, engine, loras, onLoraChange, onRefresh, modelError,
+  mode, models, activeModel, navigate, engine, loras, onLoraChange,
 }) {
   const isXL = (engine?.family || activeModel?.family) === "sdxl";
   const dimensions = isXL ? { portrait: [640, 768], square: [768, 768], landscape: [768, 640] } : { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
@@ -99,11 +99,6 @@ function CreateImagePage({
   const cgroupRamAvailable = loadBudget?.ram_cgroup_limit_bytes == null ? null :
     Math.max(0, loadBudget.ram_cgroup_limit_bytes - (loadBudget.ram_cgroup_current_bytes || 0));
   const vramEstimate = loadBudget?.cpu_offload_enabled ? loadBudget?.vram_low_required_bytes : loadBudget?.vram_standard_required_bytes;
-  const simpleModelState = modelState === "loading" ? "Preparando modelo" :
-    modelState === "generating" ? "Generando" : modelState === "loaded" ? "Cargado · generación aún no validada" :
-      modelState === "error" ? `Error${engine?.model_error ? ` · ${engine.model_error}` : ""}` :
-        modelState === "incompatible" ? "Incompatible" : "Seleccionado";
-
   function chooseFormat(nextFormat) {
     const [width, height] = dimensions[nextFormat];
     updateField("width", width);
@@ -114,17 +109,13 @@ function CreateImagePage({
     <section className="page-content">
       <button className="back-link" onClick={() => navigate("home")}>← Inicio</button>
       <div className="page-heading">
-        <p className="eyebrow">CREACIÓN</p>
         <h1>Crear imagen</h1>
         <p>Describe lo que tienes en mente. No necesitas conocer términos técnicos.</p>
       </div>
       <div className="creation-layout">
         <div className="form-card">
-          <div className="notice" aria-live="polite">
-            <strong>Modelo: {engine?.model || activeModel?.label || "No disponible"}</strong>
-            {!expert ? <p>Estado: {simpleModelState}</p> : <>
-              <p>Familia: {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · Estado del modelo: {modelStateLabel(modelState)}</p>
-              <p>Motor: {busy ? "Ocupado" : "Inactivo"}</p>
+          {expert && <details className="expert-model-info"><summary>Detalles del modelo y memoria</summary>
+              <p>{engine?.model || activeModel?.label || "No disponible"} · {isXL ? "SDXL" : (engine?.family || activeModel?.family) === "sd15" ? "SD 1.5" : "Desconocida"} · {activeModel?.origin || "Origen desconocido"} · {modelStateLabel(modelState)} · Motor: {busy ? "Ocupado" : "Inactivo"}</p>
               <p>LoRA activos ({loras.filter((item) => item.active).length}): {loras.filter((item) => item.active).map((item) => item.label).join(", ") || "Ninguno"}</p>
               {isXL && <p>SDXL en 4 GB requiere validación y puede superar la memoria disponible.</p>}
               {loadBudget && <section className="notice" aria-label="Diagnóstico de memoria SDXL">
@@ -136,9 +127,7 @@ function CreateImagePage({
                 {loadBudget.reasons?.map((reason) => <p key={reason} role="status">{reason}</p>)}
               </section>}
               {engine?.model_error && modelState === "error" && <p role="status">La carga o generación falló ({engine.model_error}). Puedes volver a intentar; el motor libera los recursos parciales.</p>}
-            </>}
-          </div>
-          <ModelSelector models={models} activeModel={activeModel} busy={busy} onChange={onModelChange} onRefresh={onRefresh} error={modelError} engine={engine} expert={expert} />
+          </details>}
           <label className="field">
             <span>¿Qué imagen quieres crear?</span>
             <textarea
@@ -148,6 +137,20 @@ function CreateImagePage({
               rows={5}
             />
           </label>
+          <details className="negative-prompt">
+            <summary>Prompt negativo (opcional)</summary>
+            <label className="field">
+              <span>Qué quieres evitar en la imagen</span>
+              <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
+            </label>
+          </details>
+          <details className="negative-prompt">
+            <summary>Prompt negativo (opcional)</summary>
+            <label className="field">
+              <span>Qué quieres evitar en la imagen</span>
+              <textarea value={form.negative_prompt} onChange={(event) => updateField("negative_prompt", event.target.value)} rows={2} />
+            </label>
+          </details>
           <fieldset className="format-options">
             <legend>Formato</legend>
             {[
@@ -657,8 +660,8 @@ export default function App() {
         <CreateImagePage
           form={form} updateField={updateField} reference={reference} setReference={setReference} onReferenceFile={loadReference}
           onGenerate={handleGenerate} busy={busy} error={generationError || pollError} job={job}
-          mode={mode} models={models} activeModel={activeModel} onModelChange={handleModelChange} navigate={navigate} uploadLimits={uploadLimits}
-          engine={engine} loras={loras} onLoraChange={handleLoraChange} onRefresh={refreshCatalog} modelError={modelError}
+          mode={mode} activeModel={activeModel} navigate={navigate} uploadLimits={uploadLimits}
+          engine={engine} loras={loras} onLoraChange={handleLoraChange}
         />
       );
     }
@@ -693,6 +696,7 @@ export default function App() {
           <button className={page === "home" ? "active" : ""} aria-current={page === "home" ? "page" : undefined} onClick={() => navigate("home")}>Inicio</button>
           <button className={page === "gallery" ? "active" : ""} aria-current={page === "gallery" ? "page" : undefined} onClick={() => navigate("gallery")}>Mis creaciones</button>
         </nav>
+        <ModelSelector models={models} activeModel={activeModel} busy={busy} onChange={handleModelChange} onRefresh={refreshCatalog} error={modelError} engine={engine} expert={mode === "expert"} compact />
         <button className={`mode-toggle ${mode === "expert" ? "enabled" : ""}`} onClick={toggleMode} aria-pressed={mode === "expert"}>
           {mode === "expert" ? "Modo experto · Activado" : "Modo experto"}
         </button>

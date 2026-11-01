@@ -232,18 +232,48 @@ class PizarraStorage:
         self._written_bytes = 0 if config.metrics_enabled else None
         self._read_seconds = 0.0 if config.metrics_enabled else None
         self._write_seconds = 0.0 if config.metrics_enabled else None
+        self._last_io_at = None
+        self._last_io_kind = None
+        self._io_local = threading.local()
+        self._category_bytes = {"metadata_read_bytes": 0, "metadata_written_bytes": 0,
+                                "tensor_read_bytes": 0, "tensor_written_bytes": 0} if config.metrics_enabled else None
+
+    @contextlib.contextmanager
+    def _io_category(self, category):
+        previous = getattr(self._io_local, "category", "metadata")
+        self._io_local.category = category
+        try:
+            yield
+        finally:
+            self._io_local.category = previous
 
     def _account_read(self, count, elapsed):
         if self.config.metrics_enabled:
             with self._thread_lock:
                 self._read_bytes += count
                 self._read_seconds += elapsed
+                if count:
+                    self._last_io_at = time.time()
+                    self._last_io_kind = "read"
+                    self._category_bytes[f"{getattr(self._io_local, 'category', 'metadata')}_read_bytes"] += count
 
     def _account_write(self, count, elapsed):
         if self.config.metrics_enabled:
             with self._thread_lock:
                 self._written_bytes += count
                 self._write_seconds += elapsed
+                if count:
+                    self._last_io_at = time.time()
+                    self._last_io_kind = "write"
+                    self._category_bytes[f"{getattr(self._io_local, 'category', 'metadata')}_written_bytes"] += count
+
+    def _account_tensor_read(self, count, elapsed):
+        with self._io_category("tensor"):
+            self._account_read(count, elapsed)
+
+    def _account_tensor_write(self, count, elapsed):
+        with self._io_category("tensor"):
+            self._account_write(count, elapsed)
 
     @contextlib.contextmanager
     def _root(self):
@@ -366,6 +396,8 @@ class PizarraStorage:
                 "quota_remaining_bytes": quota_left, "min_free_bytes": self.config.min_free_bytes,
                 "available_bytes": usable, "read_bytes": self._read_bytes, "written_bytes": self._written_bytes,
                 "read_seconds": self._read_seconds, "write_seconds": self._write_seconds,
+                "last_io_at": self._last_io_at, "last_io_kind": self._last_io_kind,
+                **(self._category_bytes or {}),
                 "read_bytes_per_second": (self._read_bytes / self._read_seconds if self._read_seconds else None),
                 "write_bytes_per_second": (self._written_bytes / self._write_seconds if self._write_seconds else None)}
 
@@ -377,6 +409,19 @@ class PizarraStorage:
 
     def stats(self):
         return self.validate()
+
+    def activity_status(self):
+        """Validate availability and report counters without walking managed trees."""
+        if not self.config.enabled:
+            return {"enabled": False, "available": False}
+        with self._thread_lock, self._root() as root:
+            fs = os.fstatvfs(root)
+            return {"enabled": True, "available": True,
+                    "total_bytes": fs.f_blocks * fs.f_frsize,
+                    "free_bytes": fs.f_bavail * fs.f_frsize,
+                    "read_bytes": self._read_bytes, "written_bytes": self._written_bytes,
+                    "last_io_at": self._last_io_at, "last_io_kind": self._last_io_kind,
+                    **(self._category_bytes or {})}
 
     @contextlib.contextmanager
     def _workspace(self, root, job_id):
@@ -479,8 +524,8 @@ class PizarraStorage:
                 os.fsync(temp)
                 data_fd = os.open(data_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=temp)
                 try:
-                    _write_all(data_fd, header, self._account_write)
-                    _write_all(data_fd, payload, self._account_write)
+                    _write_all(data_fd, header, self._account_tensor_write)
+                    _write_all(data_fd, payload, self._account_tensor_write)
                     os.fsync(data_fd)
                 finally:
                     os.close(data_fd)
@@ -512,7 +557,7 @@ class PizarraStorage:
             target = _directory(job, area)
             try:
                 _, marker_name, data_name = self._lease(temp, job_id, manifest, token)
-                record = _read_file(temp, data_name, account=self._account_read)
+                record = _read_file(temp, data_name, account=self._account_tensor_read)
                 self._unpack(record)
                 self._check_root(root)
                 try:
@@ -547,7 +592,7 @@ class PizarraStorage:
         with self._thread_lock, self._root() as root, self._workspace(root, job_id) as (job, _):
             target = _directory(job, area)
             try:
-                record = _read_file(target, name, account=self._account_read)
+                record = _read_file(target, name, account=self._account_tensor_read)
                 data = self._unpack(record)
                 self._check_root(root)
             finally:

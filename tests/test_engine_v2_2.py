@@ -1,5 +1,6 @@
 """Engine regression suite: all model loading/inference and network are mocked."""
 import threading
+import os
 import tempfile
 import unittest
 import weakref
@@ -92,6 +93,9 @@ class SingletonTests(OfflineTests):
 
 class ServiceTests(OfflineTests):
     def setUp(self):
+        pizarra = patch.dict(os.environ, {"BUTTERVISION_PIZARRA_MODE": "OFF", "BUTTERVISION_PIZARRA_ENABLED": "AUTO"})
+        pizarra.start()
+        self.addCleanup(pizarra.stop)
         super().setUp()
         self.sd = Mock(model_id="model.safetensors")
         self.sd.loaded_loras = {}

@@ -1,4 +1,5 @@
 import unittest
+import os
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,11 @@ from api.generation import PizarraUnavailableError
 
 
 class PizarraApiTests(unittest.TestCase):
+    def setUp(self):
+        self.pizarra_env = patch.dict(os.environ, {"BUTTERVISION_PIZARRA_MODE": "OFF", "BUTTERVISION_PIZARRA_ENABLED": "AUTO"})
+        self.pizarra_env.start()
+        self.addCleanup(self.pizarra_env.stop)
+
     def test_disabled_status_and_missing_metrics(self):
         engine = Mock()
         engine.pizarra_config = SimpleNamespace(enabled=False)
@@ -53,6 +59,21 @@ class PizarraApiTests(unittest.TestCase):
             result = api_app.pizarra_status(include_budget=True)
         self.assertNotIn("budget", ordinary)
         self.assertEqual(result["budget"], budget)
+
+    def test_light_status_reads_counters_without_scanning_managed_tree(self):
+        engine = Mock()
+        engine.pizarra_config = SimpleNamespace(enabled=True, metrics_enabled=True)
+        engine.pizarra_storage.activity_status.return_value = {
+            "total_bytes": 100, "free_bytes": 50, "read_bytes": 12, "written_bytes": 4,
+            "last_io_at": __import__("time").time(), "last_io_kind": "read",
+            "metadata_read_bytes": 8, "metadata_written_bytes": 2,
+            "tensor_read_bytes": 4, "tensor_written_bytes": 2,
+        }
+        with patch.object(api_app, "get_service", return_value=engine):
+            result = api_app.pizarra_status(light=True)
+        engine.pizarra_storage.stats.assert_not_called()
+        self.assertTrue(result["activity"]["confirmed"])
+        self.assertEqual(result["storage"]["tensor_read_bytes"], 4)
 
     def test_unavailable_generation_is_controlled_503_without_paths(self):
         engine = Mock()

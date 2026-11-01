@@ -156,14 +156,21 @@ class GenerationService:
         model_infos = self.model_manager.list_local_model_infos()
         active = self.sd_manager.model_id
         models = []
+        counts = {}
+        for info in model_infos:
+            counts[info["name"]] = counts.get(info["name"], 0) + 1
         for info in model_infos:
             value = info["path"]
             family = info.get("family", UNKNOWN)
             state = "incompatible" if family == UNKNOWN else ("selected" if value == active else "detected")
             if value == active:
                 state = self.model_state
-            models.append({"label": Path(value).name, "value": value, "active": value == active,
-                           "family": family, "state": state})
+            label = Path(value).name
+            if counts.get(info["name"], 0) > 1:
+                path_tag = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+                label = f"{label} · {info.get('origin', 'Otra carpeta')} · {path_tag}"
+            models.append({"label": label, "value": value, "active": value == active,
+                           "family": family, "state": state, "origin": info.get("origin", "Otra carpeta")})
         if active and all(model["value"] != active for model in models):
             models.insert(0, {"label": Path(active).name, "value": active, "active": True,
                               "family": self.family, "state": self.model_state})

@@ -82,6 +82,20 @@ def roots(kind):
     defaults = [config.SD_MODELS_DIR] if kind == "checkpoint" else [config.LORA_DIR, config.PROJECT_ROOT / "loras"]
     variable = "BUTTERVISION_CHECKPOINT_DIRS" if kind == "checkpoint" else "BUTTERVISION_LORA_DIRS"
     values = defaults + [Path(p).expanduser() for p in os.environ.get(variable, "").split(os.pathsep) if p]
+    if kind == "checkpoint":
+        forge_candidates = [Path.home() / "stable-diffusion-webui-forge",
+                            Path.home() / "proyectos_2024/stable-diffusion-webui-forge"]
+        configured = os.environ.get("BUTTERVISION_FORGE_HOME", "").strip()
+        if configured:
+            forge_candidates.insert(0, Path(configured).expanduser())
+        values += [forge / "models/Stable-diffusion" for forge in forge_candidates]
+    else:
+        forge_candidates = [Path.home() / "stable-diffusion-webui-forge",
+                            Path.home() / "proyectos_2024/stable-diffusion-webui-forge"]
+        configured = os.environ.get("BUTTERVISION_FORGE_HOME", "").strip()
+        if configured:
+            forge_candidates.insert(0, Path(configured).expanduser())
+        values += [forge / "models/Lora" for forge in forge_candidates]
     result = []
     for root in values:
         try:
@@ -104,14 +118,38 @@ def entries(kind):
                         continue
                     if kind == "checkpoint" and ((path.is_file() and path.suffix.lower() in (".safetensors", ".ckpt")) or
                                                   (path.is_dir() and (path / "model_index.json").is_file())):
+                        if path.is_file() and path.stat().st_size == 0:
+                            continue
                         found.add(path)
                     elif kind == "lora" and path.is_file() and path.suffix.lower() == ".safetensors":
-                        found.add(path)
+                        if path.stat().st_size:
+                            found.add(path)
                 except (OSError, RuntimeError):
                     continue
         except OSError:
             continue
     return sorted(found, key=lambda p: str(p).lower())
+
+
+def origin(path, kind="checkpoint"):
+    """Return a stable, display-safe source category for a catalog path."""
+    try:
+        resolved = Path(path).resolve(strict=True)
+        own = (config.SD_MODELS_DIR if kind == "checkpoint" else config.LORA_DIR).resolve()
+        if resolved.is_relative_to(own):
+            return "Buttervision"
+        configured = os.environ.get("BUTTERVISION_FORGE_HOME", "").strip()
+        forge_roots = [Path.home() / "stable-diffusion-webui-forge",
+                       Path.home() / "proyectos_2024/stable-diffusion-webui-forge"]
+        if configured:
+            forge_roots.insert(0, Path(configured).expanduser())
+        for forge in forge_roots:
+            base = forge / ("models/Stable-diffusion" if kind == "checkpoint" else "models/Lora")
+            if resolved.is_relative_to(base.resolve()):
+                return "Forge"
+    except (OSError, RuntimeError):
+        pass
+    return "Otra carpeta"
 
 
 def approved_path(value, kind):

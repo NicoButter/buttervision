@@ -18,7 +18,7 @@ from safetensors.torch import save_file
 import api.app as api_app
 import config
 from api.generation import EngineBusyError, GenerationJob, GenerationService
-from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family
+from core.model_catalog import SD15, SDXL, UNKNOWN, approved_path, checkpoint_family, entries, lora_family, roots
 from core.sdxl_pipeline import SDXLPipeline, check_budget, local_sdxl_config
 from core.sdxl_memory import plan_strategy, _cgroup_memory
 from core.sdxl_memory import _disk_target
@@ -68,6 +68,9 @@ def memory_resources(*, ram=16, vram=4, cuda=True, accelerate=True, cpu_offload=
 
 class OfflineFixture(unittest.TestCase):
     def setUp(self):
+        pizarra = patch.dict(os.environ, {"BUTTERVISION_PIZARRA_MODE": "OFF", "BUTTERVISION_PIZARRA_ENABLED": "AUTO"})
+        pizarra.start()
+        self.addCleanup(pizarra.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -108,6 +111,31 @@ class OfflineFixture(unittest.TestCase):
 
 
 class CatalogTests(OfflineFixture):
+    def test_automatic_forge_discovery_combines_sources_and_skips_empty(self):
+        forge = self.root / "stable-diffusion-webui-forge"
+        forge_checkpoints = forge / "models/Stable-diffusion"
+        forge_loras = forge / "models/Lora"
+        forge_checkpoints.mkdir(parents=True)
+        forge_loras.mkdir(parents=True)
+        external = forge_checkpoints / "outside.safetensors"
+        checkpoint(external, SD15)
+        (forge_checkpoints / "empty.safetensors").touch()
+        lora(forge_loras / "outside-lora.safetensors", SD15)
+        with patch("pathlib.Path.home", return_value=self.root), patch.dict(os.environ, {
+            "BUTTERVISION_FORGE_HOME": "", "BUTTERVISION_CHECKPOINT_DIRS": str(forge_checkpoints),
+        }):
+            models = entries("checkpoint")
+            adapters = entries("lora")
+            self.assertIn(self.sd.resolve(), models)
+            self.assertIn(external.resolve(), models)
+            self.assertNotIn((forge_checkpoints / "empty.safetensors").resolve(), models)
+            self.assertEqual(models.count(external.resolve()), 1)
+            self.assertIn((forge_loras / "outside-lora.safetensors").resolve(), adapters)
+
+    def test_no_forge_installed_is_ignored(self):
+        with patch("pathlib.Path.home", return_value=self.root), patch.dict(os.environ, {"BUTTERVISION_FORGE_HOME": ""}):
+            self.assertEqual(roots("checkpoint")[0], self.models.resolve())
+
     def test_architecture_uses_structure_not_filename(self):
         self.assertEqual(checkpoint_family(self.sd), SD15)
         self.assertEqual(checkpoint_family(self.xl), SDXL)

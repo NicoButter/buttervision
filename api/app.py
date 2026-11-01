@@ -1,5 +1,7 @@
 from pathlib import Path
+import os
 import threading
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -151,18 +153,53 @@ def history(limit: int = 24):
 
 
 @app.get("/api/pizarra/status")
-def pizarra_status(include_budget: bool = False):
+def pizarra_status(include_budget: bool = False, light: bool = False):
     engine = get_service()
     if not engine.pizarra_config.enabled:
-        return {"enabled": False, "available": None, "metrics_enabled": False, "storage": None}
+        detected = False
+        auto_requested = (os.environ.get("BUTTERVISION_PIZARRA_ENABLED", "AUTO").strip().upper() == "AUTO"
+                         and os.environ.get("BUTTERVISION_PIZARRA_MODE", "AUTO").strip().upper() == "AUTO")
+        try:
+            if not auto_requested:
+                raise RuntimeError("PIZARRA explicitly disabled")
+            from core.pizarra.storage import _mount_identity
+            from core.pizarra.config import PizarraConfig
+            root = PizarraConfig.from_env().root
+            _mount_identity(root)
+            detected = True
+        except Exception:
+            pass
+        return {"enabled": False, "available": False if detected else None, "pending_authorization": detected,
+                "metrics_enabled": False, "storage": None}
     try:
-        stats = engine.pizarra_storage.stats()
+        stats = engine.pizarra_storage.activity_status() if light else engine.pizarra_storage.stats()
+        if light:
+            result = {"enabled": True, "available": True,
+                      "metrics_enabled": engine.pizarra_config.metrics_enabled,
+                      "activity": {"confirmed": bool(engine.pizarra_config.metrics_enabled and stats.get("last_io_at")
+                                                           and time.time() - stats["last_io_at"] < 3),
+                                   "last_io_at": stats.get("last_io_at"), "last_io_kind": stats.get("last_io_kind"),
+                                   "read_bytes": stats.get("read_bytes"), "written_bytes": stats.get("written_bytes")},
+                      "storage": {"total_bytes": stats.get("total_bytes"), "free_bytes": stats.get("free_bytes"),
+                                  "metadata_read_bytes": stats.get("metadata_read_bytes"),
+                                  "metadata_written_bytes": stats.get("metadata_written_bytes"),
+                                  "tensor_read_bytes": stats.get("tensor_read_bytes"),
+                                  "tensor_written_bytes": stats.get("tensor_written_bytes")}}
+            return result
         # Public observability is a whitelist: never return root/device paths.
         fields = ("total_bytes", "free_bytes", "managed_bytes", "quota_bytes",
-                  "quota_remaining_bytes", "min_free_bytes", "available_bytes")
+                  "quota_remaining_bytes", "min_free_bytes", "available_bytes", "read_bytes", "written_bytes",
+                  "read_seconds", "write_seconds", "metadata_read_bytes", "metadata_written_bytes",
+                  "tensor_read_bytes", "tensor_written_bytes")
         result = {"enabled": True, "available": True,
                   "metrics_enabled": engine.pizarra_config.metrics_enabled,
-                  "storage": {key: stats.get(key) for key in fields}}
+                  "storage": {key: stats.get(key) for key in fields},
+                  "activity": {"confirmed": bool(engine.pizarra_config.metrics_enabled and stats.get("last_io_at")
+                                                       and time.time() - stats["last_io_at"] < 3),
+                               "last_io_at": stats.get("last_io_at"),
+                               "last_io_kind": stats.get("last_io_kind"),
+                               "read_bytes": stats.get("read_bytes"),
+                               "written_bytes": stats.get("written_bytes")}}
     except Exception:
         result = {"enabled": True, "available": False,
                   "metrics_enabled": engine.pizarra_config.metrics_enabled,
