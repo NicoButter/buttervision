@@ -2,6 +2,7 @@
 import json
 import gc
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -456,14 +457,41 @@ class BackendTests(OfflineFixture):
         with self.assertRaisesRegex(ValueError, "catálogo local"):
             build_scope_command(str(self.root / "outside.safetensors"), memory_max_gib=10)
 
+    def test_pizarra_probe_is_explicit_and_cannot_bypass_its_disk_guard(self):
+        with patch("scripts.sdxl_isolated_probe.psutil.virtual_memory", return_value=SimpleNamespace(total=16 * 1024**3)):
+            command = build_scope_command(str(self.xl), memory_max_gib=10,
+                                          pizarra_adapter=True, pizarra_strategy="CPU_OFFLOAD")
+            self.assertIn("--pizarra-adapter", command)
+            self.assertIn("CPU_OFFLOAD", command)
+            with self.assertRaisesRegex(ValueError, "no puede usar el offload a disco"):
+                build_scope_command(str(self.xl), memory_max_gib=10,
+                                    strategy="DISK_OFFLOAD", pizarra_adapter=True)
+
     def test_probe_scope_leaves_host_headroom(self):
         with patch("scripts.sdxl_isolated_probe.psutil.virtual_memory", return_value=SimpleNamespace(total=16 * 1024**3)):
             with self.assertRaisesRegex(ValueError, "dejar 4 GiB"):
                 build_scope_command(str(self.xl), memory_max_gib=13)
 
+    def test_supervisor_captures_worker_output_and_process_tree_rss(self):
+        from scripts.sdxl_isolated_probe import run_supervised
+        result = run_supervised([sys.executable, "-c", "print('probe-ok')"], cwd=self.root,
+                                timeout_seconds=5, sample_interval=0.01)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("probe-ok", result.stdout)
+        self.assertGreater(result.process_monitor["rss_peak_sampled_process_tree_bytes"], 0)
+
+    def test_supervisor_terminates_worker_at_parent_timeout(self):
+        from scripts.sdxl_isolated_probe import run_supervised
+        result = run_supervised([sys.executable, "-c", "import time; time.sleep(5)"], cwd=self.root,
+                                timeout_seconds=0.05, sample_interval=0.01)
+        self.assertEqual(result.returncode, 124)
+        self.assertTrue(result.process_monitor["timed_out"])
+
     def test_probe_reports_child_oom_exit_without_running_an_inference(self):
         from scripts import sdxl_isolated_probe
-        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe.subprocess, "run", return_value=SimpleNamespace(returncode=137)) as run, patch("sys.stderr"):
+        result_data = SimpleNamespace(returncode=137, stdout="", stderr="",
+                                      process_monitor={"rss_peak_sampled_process_tree_bytes": 123})
+        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe, "run_supervised", return_value=result_data) as run, patch("sys.stderr"):
             result = sdxl_isolated_probe.main(["--execute", "--model", str(self.xl)])
         self.assertEqual(result, 137)
         run.assert_called_once()
@@ -471,7 +499,7 @@ class BackendTests(OfflineFixture):
     def test_probe_releases_cross_process_guard_after_child_oom(self):
         from scripts import sdxl_isolated_probe
         from core.inference_lock import acquire_inference_lock, release_inference_lock
-        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe.subprocess, "run", return_value=SimpleNamespace(returncode=137)), patch("sys.stderr"):
+        with patch.object(sdxl_isolated_probe, "config_local_offload_enabled", return_value=True), patch.object(sdxl_isolated_probe, "shutil_which", side_effect=["/usr/bin/systemd-run", "/usr/bin/timeout"]), patch.object(sdxl_isolated_probe, "build_scope_command", return_value=["systemd-run", "worker"]), patch.object(sdxl_isolated_probe, "run_supervised", return_value=SimpleNamespace(returncode=137, stdout="", stderr="", process_monitor={})), patch("sys.stderr"):
             result = sdxl_isolated_probe.main(["--execute", "--model", str(self.xl)])
         self.assertEqual(result, 137)
         recovered = acquire_inference_lock()

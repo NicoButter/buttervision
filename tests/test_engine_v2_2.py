@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import torch
 from accelerate.hooks import AlignDevicesHook, add_hook_to_module
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 import api.app as api_app
 import config
@@ -47,6 +47,11 @@ def mock_pipe():
 class OfflineTests(unittest.TestCase):
     def setUp(self):
         # Fail closed if any test accidentally reaches network/model downloads.
+        self.cache_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.cache_dir.cleanup)
+        self.cache = patch.object(config, "CACHE_DIR", Path(self.cache_dir.name))
+        self.cache.start()
+        self.addCleanup(self.cache.stop)
         self.network = patch("requests.sessions.Session.request", side_effect=AssertionError("network forbidden"))
         self.network.start()
         self.addCleanup(self.network.stop)
@@ -146,7 +151,7 @@ class ServiceTests(OfflineTests):
                 self.engine.create_job("txt2img", {})
             with self.assertRaises(EngineBusyError):
                 self.engine.set_model("other")
-            self.engine._run_job(job)  # Execute the captured worker, no model load (empty prompt).
+            self.engine._run_job(*thread.call_args.kwargs["args"])  # Execute captured worker; no model load.
         self.wait_idle()
         self.assertEqual(job.status, "failed")
         with patch("api.generation.threading.Thread.start", side_effect=RuntimeError("start")):
@@ -161,17 +166,18 @@ class ServiceTests(OfflineTests):
 
     def test_http_409_for_both_generation_modes_and_checkpoint_while_busy(self):
         job = self.block_job()
-        client = TestClient(api_app.app)
-        with patch.object(api_app, "get_service", return_value=self.engine), patch.object(api_app, "validate_reference_image"):
-            for route, payload in (
-                ("/api/generate/txt2img", {"prompt": "test"}),
-                ("/api/generate/face-reference", {"prompt": "test", "reference_image": "private"}),
-                ("/api/models/active", {"model_id": "other.safetensors"}),
-            ):
-                response = client.post(route, json=payload)
-                self.assertEqual(response.status_code, 409, response.text)
-                self.assertIn("ocupado", response.json()["detail"])
-            self.assertEqual(client.get(f"/api/jobs/{job.id}").json()["status"], "running")
+        operations = (
+            lambda: api_app.engine_call(self.engine.create_job, "txt2img", {"prompt": "test"}),
+            lambda: api_app.engine_call(self.engine.create_job, "face_reference", {"prompt": "test"}),
+            lambda: api_app.engine_call(self.engine.set_model, "other.safetensors"),
+        )
+        for operation in operations:
+            with self.assertRaises(HTTPException) as raised:
+                operation()
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertIn("ocupado", raised.exception.detail)
+        with patch.object(api_app, "get_service", return_value=self.engine):
+            self.assertEqual(api_app.get_job(job.id)["status"], "running")
         self.sd.change_model.assert_not_called()
         self.finished.set()
         self.wait_idle()
@@ -220,9 +226,9 @@ class ServiceTests(OfflineTests):
         self.sd.generate_image.side_effect = generate
         job = self.run_job()
         with patch.object(api_app, "get_service", return_value=self.engine):
-            response = TestClient(api_app.app).get(f"/api/jobs/{job.id}")
-        self.assertEqual(response.json()["warnings"], ["El prompt se truncará."])
-        self.assertEqual(response.json()["status"], "completed")
+            response = api_app.get_job(job.id)
+        self.assertEqual(response["warnings"], ["El prompt se truncará."])
+        self.assertEqual(response["status"], "completed")
 
     def test_missing_checkpoint_preserves_current_model(self):
         self.models.catalog_checkpoint.side_effect = None

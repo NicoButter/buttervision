@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
+from types import SimpleNamespace
 from pathlib import Path
 
 import psutil
@@ -26,13 +28,16 @@ from core.inference_lock import acquire_inference_lock, release_inference_lock
 
 def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_seconds=3600,
                         python_executable=sys.executable, systemd_run="systemd-run", timeout_executable="timeout",
-                        strategy="AUTO", disk_offload_dir=None):
+                        strategy="AUTO", disk_offload_dir=None, pizarra_adapter=False,
+                        pizarra_strategy="AUTO"):
     """Build, but do not run, a bounded local systemd user scope command."""
     from core.model_catalog import SDXL, approved_path, checkpoint_family
 
     strategy = str(strategy).upper()
     if strategy not in ("AUTO", "LOW_RAM", "LOW_VRAM", "DISK_OFFLOAD"):
         raise ValueError("El sondeo acepta AUTO, LOW_RAM, LOW_VRAM o DISK_OFFLOAD.")
+    if pizarra_adapter and strategy == "DISK_OFFLOAD":
+        raise ValueError("El sondeo PIZARRA no puede usar el offload a disco no administrado por PIZARRA.")
     approved = approved_path(model, "checkpoint")
     if approved is None or checkpoint_family(approved) != SDXL:
         raise ValueError("El checkpoint debe ser SDXL y pertenecer al catálogo local registrado.")
@@ -53,10 +58,13 @@ def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_se
     ]
     if disk_offload_dir is not None:
         command.insert(7, f"--setenv=BUTTERVISION_SDXL_DISK_OFFLOAD_DIR={disk_offload_dir}")
+    if pizarra_adapter:
+        command.append("--pizarra-adapter")
+        command.extend(("--pizarra-strategy", str(pizarra_strategy).upper()))
     return command
 
 
-def _worker(model, timeout_seconds, strategy="AUTO"):
+def _worker(model, timeout_seconds, strategy="AUTO", pizarra_adapter=False, pizarra_strategy="AUTO"):
     from core.model_catalog import SDXL, approved_path, checkpoint_family
     from core.sdxl_pipeline import SDXLPipeline, local_sdxl_config
     import config
@@ -69,12 +77,72 @@ def _worker(model, timeout_seconds, strategy="AUTO"):
         local_sdxl_config(approved)  # validates a complete local config; never downloads
     if not torch.cuda.is_available():
         raise SystemExit("No se detecta CUDA; este sondeo valida SDXL en la GPU objetivo, no CPU.")
+    if pizarra_adapter and strategy == "DISK_OFFLOAD":
+        raise SystemExit("El adaptador PIZARRA bloquea el offload a disco no administrado por su almacenamiento.")
+    start = time.monotonic()
+    if pizarra_adapter:
+        from core.pizarra.config import PizarraConfig
+        from core.pizarra.storage import PizarraStorage
+        from core.pizarra.inference_adapter import (
+            InferenceExecutionError, InferencePlanError, PizarraInferenceAdapter,
+        )
+
+        pizarra_config = PizarraConfig.from_env()
+        storage = PizarraStorage(pizarra_config) if pizarra_config.enabled else None
+        backend = PizarraInferenceAdapter(
+            str(approved), storage, requested_strategy=pizarra_strategy,
+            metrics_enabled=pizarra_config.metrics_enabled,
+        )
+        run_id = str(uuid.uuid4())
+        try:
+            planned = backend.plan()
+
+            def report_phase(phase, model_path, plan, current_run_id):
+                print(json.dumps({"event": "pizarra_inference_probe", "run_id": current_run_id,
+                                  "phase": phase, "model": model_path.name, "family": "sdxl",
+                                  "strategy": plan["strategy"], "profile": plan["selected_profile"],
+                                  "initial_resources": {
+                                      "ram_available_bytes": plan["ram_available_bytes"],
+                                      "process_rss_bytes": plan.get("ram_process_rss_bytes"),
+                                      "vram_available_bytes": plan.get("vram_available_bytes"),
+                                  }}, sort_keys=True), flush=True)
+
+            report_phase("preparing", planned[0], planned[1], run_id)
+            images, report = backend.execute(
+                "A simple landscape, controlled local SDXL validation",
+                num_inference_steps=10, guidance_scale=5.0, width=512, height=512,
+                seed=230231, num_images=1, run_id=run_id, planned=planned,
+                on_phase=report_phase,
+            )
+            config.OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+            output = config.OUTPUTS_DIR / f"sdxl_pizarra_probe_{int(time.time())}.png"
+            images[0].save(output)
+            report["output_file"] = output.name
+            report["timings_seconds"]["total_including_output_save"] = time.monotonic() - start
+            print(json.dumps(report, sort_keys=True))
+            return 0
+        except InferenceExecutionError as error:
+            print(json.dumps(error.record, sort_keys=True), file=sys.stderr)
+            return 1
+        except InferencePlanError as error:
+            print(json.dumps({"status": "rejected", "run_id": run_id,
+                              "model": approved.name,
+                              "family": "sdxl", "error_type": type(error).__name__,
+                              "requested_strategy": pizarra_strategy.lower(),
+                              "reason": str(error), "plan": error.plan,
+                              "elapsed_seconds": time.monotonic() - start}, sort_keys=True), file=sys.stderr)
+            return 1
+        except Exception as error:
+            print(json.dumps({"status": "failed", "model": approved.name,
+                              "family": "sdxl", "error_type": type(error).__name__,
+                              "elapsed_seconds": time.monotonic() - start}, sort_keys=True), file=sys.stderr)
+            return 1
+
     if strategy != "DISK_OFFLOAD" and not config.model_config.enable_cpu_offload:
         raise SystemExit("La prueba aislada requiere el offload de CPU configurado.")
 
     backend = SDXLPipeline(str(approved), requested_strategy=strategy,
                            allow_experimental_disk=strategy == "DISK_OFFLOAD")
-    start = time.monotonic()
     try:
         images = backend.generate_image(
             "A simple landscape, controlled local SDXL validation",
@@ -105,18 +173,26 @@ def main(argv=None):
     parser.add_argument("--timeout-seconds", type=int, default=3600)
     parser.add_argument("--strategy", default="AUTO", choices=("AUTO", "LOW_RAM", "LOW_VRAM", "DISK_OFFLOAD"),
                         type=str.upper, help="Perfil interno para la prueba; DISK_OFFLOAD es experimental")
+    parser.add_argument("--pizarra-adapter", action="store_true",
+                        help="Opt-in: ejecutar mediante el adaptador experimental PIZARRA")
+    parser.add_argument("--pizarra-strategy", default="AUTO",
+                        choices=("AUTO", "STANDARD", "CPU_OFFLOAD", "DISK_OFFLOAD_EXPERIMENTAL"),
+                        type=str.upper, help="Estrategia del adaptador PIZARRA; el offload HDD está bloqueado")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.pizarra_adapter and args.strategy == "DISK_OFFLOAD":
+        parser.error("--pizarra-adapter no se combina con --strategy DISK_OFFLOAD; el HDD no tiene una concesión segura.")
     if args.worker:
         if not args.model:
             parser.error("--model requerido")
-        return _worker(args.model, args.timeout_seconds, args.strategy)
+        return _worker(args.model, args.timeout_seconds, args.strategy,
+                       args.pizarra_adapter, args.pizarra_strategy)
     if not args.execute:
         print("Sin inferencia. Para iniciar la única prueba controlada: añade --execute --model RUTA_LOCAL_REGISTRADA.")
         return 0
     if not args.model:
         parser.error("--model requerido junto a --execute")
-    if args.strategy != "DISK_OFFLOAD" and not config_local_offload_enabled():
+    if not args.pizarra_adapter and args.strategy != "DISK_OFFLOAD" and not config_local_offload_enabled():
         raise SystemExit("Activa enable_cpu_offload en la configuración local antes de la prueba.")
     executable = shutil_which("systemd-run")
     if not executable:
@@ -126,7 +202,9 @@ def main(argv=None):
         raise SystemExit("timeout de GNU coreutils no está disponible; no se iniciará una prueba sin límite temporal.")
     command = build_scope_command(args.model, args.memory_max_gib, args.timeout_seconds,
                                   python_executable=sys.executable, systemd_run=executable,
-                                  timeout_executable=timeout_executable, strategy=args.strategy)
+                                  timeout_executable=timeout_executable, strategy=args.strategy,
+                                  pizarra_adapter=args.pizarra_adapter,
+                                  pizarra_strategy=args.pizarra_strategy)
     print("Iniciando prueba SDXL 512×512, 10 pasos, lote 1 en scope systemd limitado.", flush=True)
     inference_fd = acquire_inference_lock()
     if inference_fd is None:
@@ -146,22 +224,103 @@ def main(argv=None):
                 args.model, args.memory_max_gib, args.timeout_seconds,
                 python_executable=sys.executable, systemd_run=executable,
                 timeout_executable=timeout_executable, strategy=args.strategy,
-                disk_offload_dir=disk_run_dir,
+                disk_offload_dir=disk_run_dir, pizarra_adapter=args.pizarra_adapter,
+                pizarra_strategy=args.pizarra_strategy,
             )
-        result = subprocess.run(command, cwd=PROJECT_ROOT, timeout=args.timeout_seconds + 60, check=False)
-    except subprocess.TimeoutExpired:
-        raise SystemExit("Timeout del scope; inspecciona systemd y el estado de la GPU.")
+        result = run_supervised(command, cwd=PROJECT_ROOT, timeout_seconds=args.timeout_seconds + 60)
     finally:
         if disk_run_dir is not None:
             shutil.rmtree(disk_run_dir, ignore_errors=True)
         release_inference_lock(inference_fd)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
+    print(json.dumps({"event": "supervisor_process_monitor", **result.process_monitor}, sort_keys=True))
     if result.returncode:
-        reason = ("El proceso aislado terminó con SIGKILL; revisa OOM/cgroup y los logs." if result.returncode in (137, -9)
-                  else "El worker falló, alcanzó un límite o systemd rechazó el scope.")
+        progress = _last_pizarra_progress(result.stdout)
+        if result.returncode == 124:
+            category = "timeout"
+        elif result.returncode in (137, -9, -15):
+            category = "worker_terminated_signal_or_cgroup_oom"
+        elif "oom" in result.stderr.lower() or "memory" in result.stderr.lower():
+            category = "possible_memory_limit"
+        else:
+            category = "worker_or_systemd_error"
         print(json.dumps({"status": "failed", "isolated": True,
-                          "return_code": result.returncode,
-                          "reason": reason}), file=sys.stderr)
+                          "return_code": result.returncode, "failure_category": category,
+                          "last_worker_progress": progress,
+                          "reason": "Inspecciona stderr, el journal del scope y la última fase registrada.",
+                          "process_monitor": result.process_monitor}, sort_keys=True), file=sys.stderr)
     return result.returncode
+
+
+def _last_pizarra_progress(output):
+    result = None
+    for line in output.splitlines():
+        try:
+            candidate = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if candidate.get("event") == "pizarra_inference_probe":
+            result = candidate
+    return result
+
+
+def run_supervised(command, *, cwd, timeout_seconds, sample_interval=0.25):
+    """Capture worker output and periodically sample the wrapper process tree."""
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stdout_file, \
+            tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as stderr_file:
+        process = subprocess.Popen(command, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
+                                   text=True, close_fds=True)
+        started = time.monotonic()
+        initial, peak, final = _process_tree_rss(process.pid), 0, 0
+        peak = initial
+        timed_out = False
+        while process.poll() is None:
+            current = _process_tree_rss(process.pid)
+            peak = max(peak, current)
+            try:
+                process.wait(timeout=sample_interval)
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - started >= timeout_seconds:
+                    timed_out = True
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    break
+        final = _process_tree_rss(process.pid)
+        peak = max(peak, final)
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        code = 124 if timed_out else process.returncode
+        return SimpleNamespace(
+            returncode=code, stdout=stdout_file.read(), stderr=stderr_file.read(),
+            process_monitor={"rss_initial_process_tree_bytes": initial,
+                             "rss_final_process_tree_bytes": final,
+                             "rss_peak_sampled_process_tree_bytes": peak,
+                             "sample_interval_seconds": sample_interval,
+                             "duration_seconds": time.monotonic() - started,
+                             "timed_out": timed_out},
+        )
+
+
+def _process_tree_rss(pid):
+    try:
+        parent = psutil.Process(pid)
+        processes = [parent, *parent.children(recursive=True)]
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+        return 0
+    total = 0
+    for process in processes:
+        try:
+            total += process.memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.Error):
+            continue
+    return total
 
 
 def config_local_offload_enabled():

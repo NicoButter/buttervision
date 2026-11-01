@@ -30,6 +30,8 @@ class MetricsTests(unittest.TestCase):
             result = metric.finish("completed", {"written_bytes": 3})
         values = result["metrics"]
         self.assertEqual(values["ram_system_available_bytes"], 888)
+        self.assertEqual(values["rss_process_initial_bytes"], 1234)
+        self.assertEqual(values["rss_process_final_bytes"], 1234)
         self.assertEqual(values["rss_process_peak_sampled_bytes"], 1234)
         self.assertEqual(values["cpu_system_percent"], 15.5)
         self.assertEqual(values["process_threads"], 4)
@@ -45,6 +47,8 @@ class MetricsTests(unittest.TestCase):
             result = metric.finish("completed")
         values = result["metrics"]
         self.assertEqual(values["vram_device_free_bytes"], 30)
+        self.assertEqual(values["vram_device_free_initial_bytes"], 30)
+        self.assertEqual(values["vram_device_free_final_bytes"], 30)
         self.assertEqual(values["vram_device_total_bytes"], 100)
         self.assertEqual(values["vram_process_peak_sampled_bytes"], 12)
         self.assertEqual(values["vram_process_peak_lifetime_bytes"], 70)

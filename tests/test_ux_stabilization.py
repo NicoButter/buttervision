@@ -1,28 +1,24 @@
 import base64
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 import api.app as api_app
 import config
-from api.app import PrivateOutputFiles, app
+from api.app import PrivateOutputFiles
+from api.schemas import FaceReferenceRequest
 from api.output_files import list_public_output_images
 
 
 class FastApiStabilizationTests(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(app)
-
     def test_runtime_endpoint_returns_configured_upload_limits(self):
-        response = self.client.get("/api/runtime")
-
-        self.assertEqual(response.status_code, 200)
+        response = api_app.runtime_info()
         self.assertEqual(
-            response.json()["upload_limits"],
+            response["upload_limits"],
             {
                 "image_bytes": config.MAX_IMAGE_UPLOAD_BYTES,
                 "video_bytes": config.MAX_VIDEO_UPLOAD_BYTES,
@@ -30,12 +26,12 @@ class FastApiStabilizationTests(unittest.TestCase):
         )
 
     def test_face_reference_rejects_unsupported_mime_before_queueing(self):
-        payload = {"prompt": "test", "reference_image": "data:image/gif;base64,YQ=="}
+        payload = FaceReferenceRequest(prompt="test", reference_image="data:image/gif;base64,YQ==")
         with patch.object(api_app, "get_service", side_effect=AssertionError("generation service should not load")):
-            response = self.client.post("/api/generate/face-reference", json=payload)
-
-        self.assertEqual(response.status_code, 415)
-        self.assertIn("JPEG, PNG o WebP", response.json()["detail"])
+            with self.assertRaises(HTTPException) as response:
+                api_app.generate_face_reference(payload)
+        self.assertEqual(response.exception.status_code, 415)
+        self.assertIn("JPEG, PNG o WebP", response.exception.detail)
 
     def test_face_reference_rejects_oversized_data_before_queueing(self):
         payload = {
@@ -44,12 +40,12 @@ class FastApiStabilizationTests(unittest.TestCase):
         }
         with patch.object(config, "MAX_IMAGE_UPLOAD_BYTES", 2):
             with patch.object(api_app, "get_service", side_effect=AssertionError("generation service should not load")):
-                response = self.client.post("/api/generate/face-reference", json=payload)
+                with self.assertRaises(HTTPException) as response:
+                    api_app.generate_face_reference(FaceReferenceRequest(**payload))
 
-        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.exception.status_code, 413)
 
     def test_output_static_files_hide_private_inputs_and_metadata(self):
-        isolated_app = FastAPI()
         with tempfile.TemporaryDirectory() as output_dir:
             folder = Path(output_dir) / "generation"
             folder.mkdir()
@@ -57,14 +53,21 @@ class FastApiStabilizationTests(unittest.TestCase):
             for name in private_files:
                 (folder / name).write_bytes(b"private")
             (folder / "image_01.png").write_bytes(b"image")
-            isolated_app.mount("/outputs", PrivateOutputFiles(directory=output_dir))
-            client = TestClient(isolated_app)
+            private_outputs = PrivateOutputFiles(directory=output_dir)
+            scope = {"type": "http", "method": "GET", "path": "/outputs/generation/image_01.png",
+                     "headers": [], "query_string": b"", "root_path": ""}
 
             for name in private_files:
-                response = client.get(f"/outputs/generation/{name}")
-                self.assertEqual(response.status_code, 404, name)
+                with self.assertRaises(HTTPException) as response:
+                    asyncio.run(private_outputs.get_response(f"generation/{name}", scope))
+                self.assertEqual(response.exception.status_code, 404, name)
                 self.assertTrue((folder / name).exists(), name)
-            self.assertEqual(client.get("/outputs/generation/image_01.png").status_code, 200)
+            with patch("starlette.staticfiles.StaticFiles.get_response", new_callable=AsyncMock) as parent:
+                marker = object()
+                parent.return_value = marker
+                response = asyncio.run(private_outputs.get_response("generation/image_01.png", scope))
+            self.assertIs(response, marker)
+            parent.assert_awaited_once_with("generation/image_01.png", scope)
 
     def test_api_and_gradio_history_exclude_private_output_images(self):
         with tempfile.TemporaryDirectory() as output_dir:

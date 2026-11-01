@@ -32,10 +32,14 @@ class PizarraMetrics:
             "cpu_process_seconds": None,
             "process_threads": None,
             "ram_system_available_bytes": None,
+            "rss_process_initial_bytes": None,
             "rss_process_bytes": None,
+            "rss_process_final_bytes": None,
             "rss_process_peak_sampled_bytes": None,
             "vram_device_total_bytes": None,
             "vram_device_free_bytes": None,
+            "vram_device_free_initial_bytes": None,
+            "vram_device_free_final_bytes": None,
             "vram_process_allocated_bytes": None,
             "vram_process_reserved_bytes": None,
             "vram_process_peak_sampled_bytes": None,
@@ -87,6 +91,10 @@ class PizarraMetrics:
             pass
         with self._lock:
             self._measurements.update(values)
+            for source, initial in (("rss_process_bytes", "rss_process_initial_bytes"),
+                                    ("vram_device_free_bytes", "vram_device_free_initial_bytes")):
+                if values.get(source) is not None and self._measurements[initial] is None:
+                    self._measurements[initial] = values[source]
             for source, peak in (("rss_process_bytes", "rss_process_peak_sampled_bytes"),
                                  ("vram_process_allocated_bytes", "vram_process_peak_sampled_bytes")):
                 value = values.get(source)
@@ -115,6 +123,8 @@ class PizarraMetrics:
         with self._lock:
             metrics = dict(self._measurements)
             phases = dict(self._phases)
+            metrics["rss_process_final_bytes"] = metrics.get("rss_process_bytes")
+            metrics["vram_device_free_final_bytes"] = metrics.get("vram_device_free_bytes")
         metrics["duration_seconds"] = time.monotonic() - self._started if self._started is not None else None
         metrics["phases_seconds"] = phases
         metrics["pizarra_storage"] = dict(storage_stats) if storage_stats is not None else None
