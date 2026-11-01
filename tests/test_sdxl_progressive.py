@@ -308,7 +308,14 @@ class ProgressiveTests(unittest.TestCase):
         with patch('scripts.sdxl_isolated_probe.psutil.virtual_memory', return_value=SimpleNamespace(total=16 * 1024**3)):
             command = build_scope_command(self.path, load_only=True)
         self.assertIn('--load-only', command)
+        self.assertIn('--scope', command)
+        self.assertIn('--collect', command)
         self.assertIn('--property=MemoryMax=10G', command)
+        self.assertIn('--property=MemoryHigh=9G', command)
+        self.assertIn('--property=MemorySwapMax=0', command)
+        self.assertIn('timeout', command)
+        self.assertIn('3600s', command)
+        self.assertNotIn('--wait', command)
 
 
 if __name__ == '__main__':

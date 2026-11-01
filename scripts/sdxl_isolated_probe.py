@@ -63,7 +63,7 @@ def build_scope_command(model, memory_max_gib=DEFAULT_MEMORY_MAX_GIB, timeout_se
     if int(timeout_seconds) < 60 or int(timeout_seconds) > 7200:
         raise ValueError("El timeout debe estar entre 60 y 7200 segundos.")
     command = [
-        systemd_run, "--user", "--scope", "--wait", "--collect", "--quiet",
+        systemd_run, "--user", "--scope", "--collect", "--quiet",
         f"--property=MemoryHigh={maximum - 1}G",
         f"--property=MemoryMax={maximum}G",
         "--property=MemorySwapMax=0",
