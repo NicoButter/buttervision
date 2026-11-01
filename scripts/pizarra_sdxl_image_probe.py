@@ -1,5 +1,6 @@
 """Opt-in CPU-only SDXL image experiment; never used by production."""
 import argparse
+import gc
 import json
 import os
 from pathlib import Path
@@ -11,10 +12,51 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.pizarra_unet_probe import check_scope, check_restore_budget, emit
+from scripts.pizarra_weight_offload_probe import cgroup_memory_path, diagnostic_memory, trim_glibc
 
 PROMPT = 'A small red apple on a wooden table, soft daylight'
 SEED = 507
 BLOCK = 'down_blocks.0.resnets.0'
+
+
+def memory_snapshot():
+    memory = diagnostic_memory()
+    stats = {key: None for key in ('anon', 'file', 'inactive_file')}
+    try:
+        path = cgroup_memory_path(Path('/proc/self/cgroup').read_text(),
+                                  Path('/proc/self/mountinfo').read_text())
+        if path is not None:
+            for line in (path.parent / 'memory.stat').read_text().splitlines():
+                key, value = line.split()
+                if key in stats:
+                    stats[key] = int(value)
+    except (OSError, ValueError):
+        pass
+    memory['cgroup_memory_stat_bytes'] = stats
+    return memory
+
+
+def prepare_embeddings(pipe, emit_event=emit):
+    """Encode once on CPU and drop the two SDXL encoders before denoising."""
+    import torch
+    emit_event('memory_before_prompt_encoding', memory=memory_snapshot())
+    start = time.monotonic()
+    emit_event('prompt_encoding_start')
+    with torch.inference_mode():
+        prompt, negative, pooled, negative_pooled = pipe.encode_prompt(
+            prompt=PROMPT, device=torch.device('cpu'), num_images_per_prompt=1,
+            do_classifier_free_guidance=False)
+    emit_event('prompt_encoding_end', seconds=time.monotonic() - start)
+    emit_event('memory_after_prompt_encoding', memory=memory_snapshot())
+    if prompt is None or pooled is None:
+        raise RuntimeError('Faltan embeddings SDXL del prompt')
+    pipe.text_encoder = None
+    pipe.text_encoder_2 = None
+    gc.collect()
+    trimmed = trim_glibc()
+    emit_event('memory_after_encoder_release', memory=memory_snapshot(), malloc_trim=trimmed)
+    return dict(prompt_embeds=prompt, negative_prompt_embeds=negative,
+                pooled_prompt_embeds=pooled, negative_pooled_prompt_embeds=negative_pooled)
 
 
 def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=None):
@@ -29,9 +71,12 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
         raise ValueError('La salida debe ser un PNG en un directorio existente')
     # Reserve the name atomically before creating a persistent session.
     reservation = output.open('xb')
-    controller = AutomaticOffload(pipe.unet, BLOCK, storage, before_restore=before_restore)
+    controller = None
+    def guarded_restore(adapter):
+        emit_event('memory_before_restore', memory=memory_snapshot())
+        if before_restore:
+            before_restore(adapter)
     original_forward = pipe.unet.forward
-    original_encode = pipe.encode_prompt
     original_decode = pipe.vae.decode
     forwards = 0
     restores = 0
@@ -45,13 +90,6 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
             emit_event('denoising_start')
         forwards += 1
         return original_forward(*args, **kwargs)
-    def encode(*args, **kwargs):
-        start = time.monotonic()
-        emit_event('prompt_encoding_start')
-        try:
-            return original_encode(*args, **kwargs)
-        finally:
-            emit_event('prompt_encoding_end', seconds=time.monotonic() - start)
     def decode(*args, **kwargs):
         nonlocal decode_seen
         decode_seen = True
@@ -66,9 +104,9 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
             emit_event('vae_result', success=False, seconds=time.monotonic() - start)
             raise
     try:
+        controller = AutomaticOffload(pipe.unet, BLOCK, storage, before_restore=guarded_restore)
         pipe.unet.eval()
         pipe.unet.forward = forward
-        pipe.encode_prompt = encode
         pipe.vae.decode = decode
         with torch.inference_mode():
             session = controller.install(on_session=lambda job, token: emit_event('session', job_id=job, token=token))
@@ -81,9 +119,10 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
                 restores += 1
                 return result
             controller.adapter.restore = counted_restore
+            embeddings = prepare_embeddings(pipe, emit_event)
             before = storage.stats()
             start = time.monotonic()
-            result = pipe(prompt=PROMPT, height=size, width=size, num_inference_steps=1,
+            result = pipe(**embeddings, height=size, width=size, num_inference_steps=1,
                           num_images_per_prompt=1, guidance_scale=1.0,
                           generator=torch.Generator(device='cpu').manual_seed(SEED), output_type='pil')
             after = storage.stats()
@@ -99,18 +138,16 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
             result.images[0].save(reservation, format='PNG')
             reservation.close()
             emit_event('png_saved', path=str(output.resolve()), width=size, height=size)
-            if before_restore:
-                before_restore(controller.adapter)
+            guarded_restore(controller.adapter)
             removed = controller.close()
             emit_event('cleaned', records_removed=removed)
             success = True
     finally:
         reservation.close()
-        if not success and controller.adapter.session is not None:
+        if not success and controller is not None and controller.adapter.session is not None:
             if controller.adapter.state == 'released':
                 try:
-                    if before_restore:
-                        before_restore(controller.adapter)
+                    guarded_restore(controller.adapter)
                     controller.adapter.restore()
                     emit_event('failure_recovered_session_preserved')
                 except Exception as error:
@@ -118,9 +155,8 @@ def generate(pipe, storage, output, size, *, emit_event=emit, before_restore=Non
             emit_event('session_preserved', job_id=controller.adapter.session['job_id'],
                        token=controller.adapter.session['token'], state=controller.adapter.state)
         # On failure leave controller and its session untouched for recovery.
-        if success or controller.adapter.session is None:
+        if controller is None or success or controller.adapter.session is None:
             pipe.unet.forward = original_forward
-        pipe.encode_prompt = original_encode
         pipe.vae.decode = original_decode
         if not success:
             output.unlink(missing_ok=True)
