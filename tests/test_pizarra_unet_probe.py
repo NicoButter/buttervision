@@ -8,7 +8,7 @@ import torch
 from core.pizarra.config import PizarraConfig
 from core.pizarra.storage import PizarraStorage, StorageUnavailable
 from core.sdxl_progressive_loader import load_progressive
-from scripts.pizarra_unet_probe import check_scope, execute_experiment, main
+from scripts.pizarra_unet_probe import check_scope, execute_experiment, execute_automatic, main
 from test_sdxl_progressive import ProgressiveTests
 
 
@@ -49,6 +49,13 @@ class UNetProbeTests(unittest.TestCase):
         self.assertGreater(events['persisted']['pizarra_write_bytes'], 0)
         self.assertGreater(events['restored']['pizarra_total_read_bytes'], 0)
         self.assertIn('cleaned', events)
+
+    def test_automatic_full_unet(self):
+        execute_automatic(self.pipe.unet, self.storage, emit_event=self.event)
+        forwards = [value for name, value in self.events if name == 'automatic_forward']
+        self.assertEqual(len(forwards), 2)
+        self.assertTrue(all(x['exact'] and x['all_meta'] and x['write_bytes'] == 0 for x in forwards))
+        self.assertIn('cleaned', dict(self.events))
 
     def test_restore_failure_preserves_session(self):
         with patch('core.pizarra.module_offload.ModuleOffload.restore', side_effect=RuntimeError('restore failed')):

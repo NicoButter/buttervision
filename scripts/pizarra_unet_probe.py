@@ -146,6 +146,63 @@ def execute_experiment(unet, storage, *, full_forward=False, malloc_trim=False, 
                 emit_event('session_preserved', job_id=adapter.session['job_id'], token=adapter.session['token'])
 
 
+def execute_automatic(unet, storage, *, malloc_trim=False, emit_event=emit, before_restore=None):
+    """Two synthetic full UNet forwards; preserve the session on failure."""
+    import torch
+    from core.pizarra.automatic_offload import AutomaticOffload
+    path = 'down_blocks.0.resnets.0'
+    block = unet.get_submodule(path)
+    _, full_inputs = inputs(unet, block)
+    unet.eval()
+    with torch.inference_mode():
+        start = time.monotonic()
+        expected = unet(**full_inputs).sample
+        emit_event('baseline', seconds=time.monotonic() - start)
+        controller = AutomaticOffload(unet, path, storage, before_restore=before_restore)
+        success = False
+        try:
+            session = controller.install(on_session=lambda job, token: emit_event('session', job_id=job, token=token))
+            emit_event('persisted', write_bytes=session['write_bytes'], write_seconds=session['write_seconds'])
+            if malloc_trim:
+                trim_glibc()
+            for step in range(2):
+                stats = storage.stats()
+                start = time.monotonic()
+                actual = unet(**full_inputs).sample
+                elapsed = time.monotonic() - start
+                after = storage.stats()
+                exact = bool(torch.equal(expected, actual))
+                all_meta = all(t.is_meta for t in list(block.parameters()) + list(block.buffers()))
+                emit_event('automatic_forward', step=step, seconds=elapsed, exact=exact,
+                           all_meta=all_meta, read_bytes=after['read_bytes'] - stats['read_bytes'],
+                           write_bytes=after['written_bytes'] - stats['written_bytes'])
+                if not exact or not all_meta or after['written_bytes'] != stats['written_bytes']:
+                    raise RuntimeError('Equivalencia, estado meta o persistencia inválidos')
+                del actual
+            success = True
+        finally:
+            if success:
+                emit_event('cleaned', records_removed=controller.close())
+            elif controller.adapter.session is not None:
+                emit_event('session_preserved', job_id=controller.adapter.session['job_id'],
+                           token=controller.adapter.session['token'])
+
+
+def check_restore_budget(adapter):
+    """Conservative headroom for weights, forward temporaries and Fedora."""
+    memory_file = cgroup_memory_path(Path('/proc/self/cgroup').read_text(), Path('/proc/self/mountinfo').read_text())
+    if memory_file is None:
+        raise RuntimeError('No se puede verificar presupuesto cgroup')
+    maximum = (memory_file.parent / 'memory.max').read_text().strip()
+    if maximum == 'max':
+        raise RuntimeError('Límite cgroup no disponible')
+    weights = sum(item['bytes'] for item in adapter.session['index'].values())
+    available = int(maximum) - int(memory_file.read_text())
+    required = weights * 2 + 512 * 1024**2
+    emit('restore_budget', available_bytes=available, required_bytes=required)
+    if available < required:
+        raise RuntimeError('Presupuesto insuficiente; sesión conservada')
+
 def worker(args):
     import torch
     from core.sdxl_pipeline import local_sdxl_config
@@ -162,7 +219,10 @@ def worker(args):
     pipe = load_progressive(path, local_sdxl_config(path), dtype=torch.float16,
                             report=lambda record: emit('progressive_load', progress=record))
     emit('loaded', load_metrics=pipe.progressive_load_metrics)
-    execute_experiment(pipe.unet, storage, full_forward=args.full_forward, malloc_trim=args.malloc_trim)
+    if args.automatic:
+        execute_automatic(pipe.unet, storage, malloc_trim=args.malloc_trim, before_restore=check_restore_budget)
+    else:
+        execute_experiment(pipe.unet, storage, full_forward=args.full_forward, malloc_trim=args.malloc_trim)
     emit('success', full_forward=args.full_forward)
 
 
@@ -173,6 +233,7 @@ def main(argv=None):
     p.add_argument('--memory-max-gib', type=int, default=10)
     p.add_argument('--timeout-seconds', type=int, default=3600)
     p.add_argument('--full-forward', action='store_true')
+    p.add_argument('--automatic', action='store_true')
     p.add_argument('--malloc-trim', action='store_true')
     p.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     p.add_argument('--unit', help=argparse.SUPPRESS)
@@ -181,6 +242,8 @@ def main(argv=None):
         p.error('requiere --execute')
     if not args.model or not 1 <= args.memory_max_gib <= 1024 or not 60 <= args.timeout_seconds <= 7200:
         p.error('modelo, límite de memoria y timeout válidos requeridos')
+    if args.automatic and args.memory_max_gib > 10:
+        p.error('El probe automático no permite más de 10 GiB')
     if args.worker:
         try:
             worker(args)
@@ -201,6 +264,8 @@ def main(argv=None):
                '--timeout-seconds', str(args.timeout_seconds)]
     if args.full_forward:
         command.append('--full-forward')
+    if args.automatic:
+        command.append('--automatic')
     if args.malloc_trim:
         command.append('--malloc-trim')
     lock = acquire_inference_lock()
