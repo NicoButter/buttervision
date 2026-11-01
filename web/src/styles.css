@@ -107,9 +107,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .mode-toggle:hover, .secondary-button:hover { border-color: #736080; background: rgba(191,155,255,.08); }
 .mode-toggle.enabled { color: #e5d4ff; border-color: #8062a6; background: rgba(167,122,245,.14); }
 .topbar { position: relative; }
-.pizarra-panel { position: relative; color: var(--muted); font-size: 12px; }
-.pizarra-panel > summary { list-style: none; cursor: pointer; white-space: nowrap; color: #e5dced; }
-.pizarra-panel > summary::-webkit-details-marker { display: none; }
+.pizarra-panel { color: var(--muted); font-size: 12px; }
+.pizarra-trigger { border: 0; padding: 10px 0; background: transparent; font: inherit; cursor: pointer; white-space: nowrap; color: #e5dced; }
+.pizarra-trigger:focus-visible, .pizarra-content:focus-visible { outline: 2px solid #c39cff; outline-offset: 4px; }
 .pizarra-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: #897b91; }
 .pizarra-dot.available { background: #72cf9b; box-shadow: 0 0 10px #72cf9b55; }
 .pizarra-dot.disabled { background: #928a9b; }
@@ -121,7 +121,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .pizarra-dot.activity-dot.active { background: #78d5a1; animation: pizarra-activity 1s ease-in-out infinite alternate; }
 @keyframes pizarra-activity { to { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .pizarra-dot.activity-dot.active { animation: none; } }
-.pizarra-content { position: absolute; z-index: 5; top: calc(100% + 14px); right: 0; width: min(390px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: #201c25; box-shadow: 0 18px 60px #0008; }
+.pizarra-content { position: absolute; z-index: 5; top: calc(100% + 8px); right: 16px; width: min(390px, calc(100vw - 32px)); max-height: min(60vh, 480px, var(--pizarra-available-height, 100vh)); max-height: min(60dvh, 480px, var(--pizarra-available-height, 100dvh)); overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: #201c25; box-shadow: 0 18px 60px #0008; }
 .pizarra-content p { margin: 10px 0; line-height: 1.5; }
 .storage-metrics { display: grid; gap: 8px; margin: 12px 0; }
 .storage-metrics div { display: flex; justify-content: space-between; gap: 12px; }
@@ -403,7 +403,7 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, #ae8be8, #e1b49
 
 @media (max-width: 780px) {
   .topbar { flex-wrap: wrap; gap: 14px 22px; padding: 14px 20px; }
-  .pizarra-content { right: -8px; }
+  .pizarra-content { right: 16px; }
   .main-nav { order: 3; width: 100%; flex-basis: 100%; gap: 23px; }
   .model-selector-compact { order: 4; min-width: min(100%, 250px); max-width: none; flex: 1; }
   .main-nav button { padding: 8px 0 12px; }

@@ -700,7 +700,7 @@ export default function App() {
         <button className={`mode-toggle ${mode === "expert" ? "enabled" : ""}`} onClick={toggleMode} aria-pressed={mode === "expert"}>
           {mode === "expert" ? "Modo experto · Activado" : "Modo experto"}
         </button>
-        <PizarraStatus />
+        <PizarraStatus navigationKey={page} />
       </header>
       {storageError && <p className="global-notice" role="status">{storageError}</p>}
       {metadataError && <p className="global-notice" role="status">{metadataError}</p>}

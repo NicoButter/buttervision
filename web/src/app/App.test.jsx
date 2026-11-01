@@ -153,6 +153,16 @@ describe("Buttervision UX", () => {
     expect(await screen.findByText("PIZARRA: Desconocido")).toBeTruthy();
   });
 
+  it("cierra PIZARRA al navegar y mantiene el selector global disponible", async () => {
+    installApiMock({ pizarra: { enabled: true, available: true, storage: {} }, models: [{ label: "CyberRealistic", value: "cyber", family: "sd15", active: true }] });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /PIZARRA: Disponible/ }));
+    expect(screen.getByRole("dialog", { name: "Estado del banco PIZARRA" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mis creaciones" }));
+    expect(screen.queryByRole("dialog", { name: "Estado del banco PIZARRA" })).toBeNull();
+    expect(screen.getByLabelText("Checkpoint registrado").disabled).toBe(false);
+  });
+
   it("confirma cambio SD 1.5 a SDXL y refresca motor y LoRA", async () => {
     const models = [
       { label: "CyberRealistic", value: "cyber", family: "sd15", active: true },
