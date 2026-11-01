@@ -444,10 +444,20 @@ class PizarraStorage:
         finally:
             os.close(jobs)
 
-    def create_workspace(self, job_id):
+    def create_workspace(self, job_id, *, offload_token=None, offload_tensor_ids=None):
         job_id = _uuid(job_id)
         manifest = {"format_version": _VERSION, "job_id": job_id, "owner": "buttervision-pizarra",
                     "workspace_token": str(uuid.uuid4()), "created_at": datetime.now(timezone.utc).isoformat()}
+        if offload_token is not None or offload_tensor_ids is not None:
+            _uuid(offload_token)
+            if (not isinstance(offload_tensor_ids, list) or not offload_tensor_ids or
+                    len(set(offload_tensor_ids)) != len(offload_tensor_ids) or
+                    any(not isinstance(x, str) or not re.fullmatch(r"[0-9a-f]{32}", x)
+                        for x in offload_tensor_ids)):
+                raise ValueError("Identificadores de offload inválidos")
+            manifest.update(offload_owner="buttervision-offload-v1",
+                            offload_token_hash=hashlib.sha256(offload_token.encode()).hexdigest(),
+                            offload_tensor_ids=offload_tensor_ids)
         manifest["checksum"] = hashlib.sha256(_canonical_json(manifest)).hexdigest()
         data = _canonical_json(manifest)
         with self._locked() as root:
@@ -652,6 +662,82 @@ class PizarraStorage:
             finally:
                 os.close(temp)
         return removed
+
+    def cleanup_offload(self, job_id, token):
+        """Remove only records belonging to a token-authorized experimental workspace.
+
+        The workspace manifest remains as an authenticated tombstone, so interrupted
+        cleanup can be retried and a second cleanup is harmless.
+        """
+        import hmac
+        _uuid(job_id)
+        _uuid(token)
+        with self._locked() as root, self._workspace(root, job_id) as (job, manifest):
+            expected = hashlib.sha256(token.encode()).hexdigest()
+            if (manifest.get("offload_owner") != "buttervision-offload-v1" or
+                    not hmac.compare_digest(manifest.get("offload_token_hash", ""), expected)):
+                raise UnsafePath("Sesión de offload no autorizada")
+            ids = manifest.get("offload_tensor_ids")
+            if (not isinstance(ids, list) or not ids or
+                    any(not isinstance(x, str) or not re.fullmatch(r"[0-9a-f]{32}", x) for x in ids)):
+                raise IntegrityError("Inventario de offload inválido")
+            if set(os.listdir(job)) != {"manifest.json", "checkpoints", "tensors", "temporary"}:
+                raise UnsafePath("Archivos ajenos en la sesión")
+            with contextlib.ExitStack() as stack:
+                directories = []
+                for name in ("checkpoints", "tensors", "temporary"):
+                    fd = _directory(job, name)
+                    stack.callback(os.close, fd)
+                    directories.append(fd)
+                checkpoints, tensors, temporary = directories
+                if os.listdir(checkpoints):
+                    raise UnsafePath("Checkpoints ajenos en la sesión")
+                names = os.listdir(tensors)
+                allowed = re.compile(r"tensor-([0-9a-f]{32})-(?:manifest\.json|block-[0-9]{8}\.bin)\Z")
+                for name in names:
+                    match = allowed.fullmatch(name)
+                    if name != "offload-index.json" and (not match or match.group(1) not in ids):
+                        raise UnsafePath("Registro ajeno en la sesión")
+                    info = os.stat(name, dir_fd=tensors, follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink > 2:
+                        raise UnsafePath("Registro inseguro en la sesión")
+                temp_names = os.listdir(temporary)
+                leases = {}
+                for name in temp_names:
+                    if name.startswith("lease-") and name.endswith(".json"):
+                        lease_id = name[6:-5]
+                        marker, _, data_name = self._lease(temporary, job_id, manifest, lease_id)
+                        leases[name] = data_name
+                    elif not (name.startswith("pending-") and name.endswith(".part")):
+                        raise UnsafePath("Temporal ajeno en la sesión")
+                if set(temp_names) - set(leases) - set(leases.values()):
+                    raise UnsafePath("Temporal sin autorización")
+                for name in temp_names:
+                    info = os.stat(name, dir_fd=temporary, follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink > 2:
+                        raise UnsafePath("Temporal inseguro")
+                # A crash after link() can leave the same committed record in both
+                # directories. No other hard links are accepted.
+                entries = [(tensors, name) for name in names] + [(temporary, name) for name in temp_names]
+                inode_counts = {}
+                for fd, name in entries:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    key = (info.st_dev, info.st_ino)
+                    inode_counts[key] = inode_counts.get(key, 0) + 1
+                for fd, name in entries:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    if inode_counts[(info.st_dev, info.st_ino)] != info.st_nlink:
+                        raise UnsafePath("Enlace físico externo a la sesión")
+                self._check_root(root)
+                removed = 0
+                for fd, entries in ((tensors, names), (temporary, sorted(temp_names, key=lambda n: n.startswith("lease-")))):
+                    for name in entries:
+                        self._check_root(root)
+                        os.unlink(name, dir_fd=fd)
+                        removed += 1
+                    os.fsync(fd)
+                self._check_root(root)
+                return removed
 
     def recover_manifests(self):
         """Return verified manifests only; never infer that inference can resume."""
