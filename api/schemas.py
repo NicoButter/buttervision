@@ -1,17 +1,25 @@
-from typing import List, Optional
+from typing import List, Optional, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 class Txt2ImgRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    engine_mode: Literal["standard", "pizarra_experimental"] = "standard"
     prompt: str = Field(min_length=1)
     negative_prompt: str = ""
     steps: int = Field(default=20, ge=1, le=60)
     cfg_scale: float = Field(default=5.0, ge=0.0, le=20.0)
-    width: int = Field(default=512, ge=256, le=1024)
-    height: int = Field(default=512, ge=256, le=1024)
+    width: int = Field(default=512, ge=64, le=1024)
+    height: int = Field(default=512, ge=64, le=1024)
     seed: int = -1
     batch_size: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def validate_standard_size(self):
+        if self.engine_mode == "standard" and (self.width < 256 or self.height < 256):
+            raise ValueError("La resolución mínima es 256 píxeles.")
+        return self
 
 
 class FaceReferenceRequest(Txt2ImgRequest):

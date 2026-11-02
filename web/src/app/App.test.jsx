@@ -318,6 +318,21 @@ describe("Buttervision UX", () => {
     await waitFor(() => expect(screen.getAllByText("En cola").length).toBeGreaterThan(0));
   });
 
+  it("envía el motor experimental SDXL con los parámetros validados", async () => {
+    const onGenerate = vi.fn();
+    installApiMock({ onGenerate, models: [{ label: "Juggernaut", value: "xl", family: "sdxl", active: true }], engine: { model: "Juggernaut", family: "sdxl", status: "idle" } });
+    await openImageCreation();
+    expect(screen.queryByLabelText("Motor de generación")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Modo experto" }));
+    fireEvent.change(screen.getByLabelText("Motor de generación"), { target: { value: "pizarra_experimental" } });
+    expect(screen.getByText(/Modo experimental: usa CPU/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("¿Qué imagen quieres crear?"), { target: { value: "Un paisaje" } });
+    fireEvent.click(screen.getByRole("button", { name: "Crear imagen" }));
+    await waitFor(() => expect(onGenerate).toHaveBeenCalled());
+    expect(onGenerate.mock.calls[0][0]).toBe("/api/generate/txt2img");
+    expect(onGenerate.mock.calls[0][1]).toMatchObject({ engine_mode: "pizarra_experimental", prompt: "Un paisaje", width: 64, height: 64, steps: 1, cfg_scale: 1, batch_size: 1 });
+  });
+
   it("usa face-reference al cargar una fotografía y muestra su vista previa", async () => {
     const onGenerate = vi.fn();
     installApiMock({ onGenerate });

@@ -331,9 +331,29 @@ class GenerationService:
         try:
             if self.family not in (SD15, SDXL):
                 raise ValueError("Selecciona un checkpoint SD 1.5 o SDXL compatible.")
+            experimental = payload.get("engine_mode", "standard") == "pizarra_experimental"
+            if experimental:
+                allowed = {"engine_mode", "prompt", "negative_prompt", "steps", "cfg_scale", "width", "height", "seed", "batch_size"}
+                if set(payload) - allowed:
+                    raise ValueError("PIZARRA experimental no admite parámetros adicionales, referencias, img2img ni video.")
+                if mode != "txt2img":
+                    raise ValueError("PIZARRA experimental solo admite txt2img.")
+                if self.family != SDXL:
+                    raise ValueError("PIZARRA experimental solo admite modelos SDXL.")
+                if self.lora_registry or payload.get("loras") or payload.get("lora"):
+                    raise ValueError("PIZARRA experimental no admite LoRA activos.")
+                if any(payload.get(key) for key in ("reference_image", "image", "init_image", "video")):
+                    raise ValueError("PIZARRA experimental no admite referencias, img2img ni video.")
+                if (payload.get("width"), payload.get("height")) not in ((64, 64), (128, 128)):
+                    raise ValueError("PIZARRA experimental solo admite 64×64 o 128×128 píxeles.")
+                if (payload.get("steps") != 1 or payload.get("cfg_scale") != 1.0 or
+                    payload.get("batch_size") != 1 or payload.get("negative_prompt")):
+                    raise ValueError("PIZARRA experimental requiere 1 paso, CFG 1, una imagen y ningún prompt negativo.")
+            if not experimental and mode == "txt2img" and (payload.get("width", 512) < 256 or payload.get("height", 512) < 256):
+                raise ValueError("La resolución mínima es 256 píxeles.")
             if mode == "face_reference" and self.family != SD15:
                 raise ValueError("Face Reference solo es compatible con SD 1.5; SDXL aún no tiene backend facial.")
-            if mode == "txt2img" and self.family == SDXL:
+            if mode == "txt2img" and self.family == SDXL and not experimental:
                 for dimension in (int(payload.get("width", 768)), int(payload.get("height", 768))):
                     if dimension not in self.resolutions():
                         raise ValueError("Resolución SDXL no disponible para este perfil de hardware.")
@@ -444,7 +464,10 @@ class GenerationService:
             with bind_pizarra_metrics(metrics) if metrics else nullcontext():
                 with metrics.phase("pipeline_execution") if metrics else nullcontext():
                     if job.mode == "txt2img":
-                        self._run_txt2img(job)
+                        if job.payload.get("engine_mode") == "pizarra_experimental":
+                            self._run_pizarra_image(job)
+                        else:
+                            self._run_txt2img(job)
                     elif job.mode == "face_reference":
                         self._run_face_reference(job)
                     else:
@@ -476,6 +499,8 @@ class GenerationService:
             else:
                 message = ("Memoria insuficiente para completar la generación. Libera recursos e intenta nuevamente."
                            if memory_error else "No se pudo completar la generación. Revisa los modelos locales y el registro del motor.")
+            if job.payload.get("engine_mode") == "pizarra_experimental" and not memory_error:
+                message = str(error) or "Falló la generación PIZARRA experimental."
             job.update(status="failed", progress=1.0, error=message, message="Failed")
             # Inference tracebacks otherwise retain pipelines and device tensors
             # while cleanup runs inside the exception handler.
@@ -593,6 +618,25 @@ class GenerationService:
             "batch_size": max(1, min(int(payload.get("batch_size", 1)), config.model_config.max_batch_size)),
             "seed": seed,
         }
+
+    def _run_pizarra_image(self, job: GenerationJob):
+        from core.pizarra.sdxl_image_service import run_image
+        import secrets
+
+        data = dict(job.payload)
+        data["seed"] = data.get("seed", -1)
+        if data["seed"] == -1:
+            data["seed"] = secrets.randbelow(2**32)
+        self._release_face()
+        self.sd_manager.cleanup()
+        self.active_pipeline = "none"
+        job.update(progress=0.15, message="Generando con PIZARRA experimental en CPU")
+        image = run_image(self.sd_manager.model_id, data["prompt"], data["width"], data["seed"])
+        paths, generation_dir = self._save_generation([image], {**data, "module": "txt2img", "model": self.sd_manager.model_id})
+        self.model_state = "selected"
+        job.update(status="completed", progress=1.0, message="Completed",
+                   result_images=[_public_output_path(path) for path in paths],
+                   info=self._format_info(data, generation_dir))
 
     def _run_txt2img(self, job: GenerationJob):
         data = self._normalized_common(job.payload)

@@ -83,7 +83,7 @@ function HomePage({ navigate }) {
 
 function CreateImagePage({
   form, updateField, reference, setReference, onReferenceFile, onGenerate, busy, error, job, uploadLimits,
-  mode, models, activeModel, navigate, engine, loras, onLoraChange,
+  mode, models, activeModel, navigate, engine, loras, onLoraChange, engineMode, setEngineMode,
 }) {
   const isXL = (engine?.family || activeModel?.family) === "sdxl";
   const dimensions = isXL ? { portrait: [640, 768], square: [768, 768], landscape: [768, 640] } : { portrait: [384, 512], square: [512, 512], landscape: [512, 384] };
@@ -128,6 +128,14 @@ function CreateImagePage({
               </section>}
               {engine?.model_error && modelState === "error" && <p role="status">La carga o generación falló ({engine.model_error}). Puedes volver a intentar; el motor libera los recursos parciales.</p>}
           </details>}
+          {expert && <label className="field">
+            <span>Motor de generación</span>
+            <select value={engineMode} disabled={busy} onChange={(event) => setEngineMode(event.target.value)}>
+              <option value="standard">Estándar</option>
+              <option value="pizarra_experimental" disabled={!isXL || faceReference || loras.some((item) => item.active)}>PIZARRA experimental (SDXL CPU)</option>
+            </select>
+          </label>}
+          {expert && engineMode === "pizarra_experimental" && <p className="notice">Modo experimental: usa CPU, puede ser lento y está pensado para pruebas controladas. Utiliza 64 × 64 píxeles, 1 paso, CFG 1 y no admite prompt negativo.</p>}
           <label className="field">
             <span>¿Qué imagen quieres crear?</span>
             <textarea
@@ -386,6 +394,7 @@ export default function App() {
   const { mode, toggleMode, storageError } = usePreferences();
   const [page, setPage] = useState("home");
   const [form, setForm] = useState(INITIAL_FORM);
+  const [engineMode, setEngineMode] = useState("standard");
   const [reference, setReference] = useState(null);
   const [models, setModels] = useState([]);
   const [engine, setEngine] = useState(null);
@@ -561,10 +570,15 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (mode !== "expert" || (engine?.family || activeModel?.family) !== "sdxl" || reference || loras.some((item) => item.active)) setEngineMode("standard");
+  }, [mode, engine?.family, activeModel?.family, reference, loras]);
+
   async function handleGenerate() {
     setGenerationError("");
     setPollError("");
     const isFaceReference = Boolean(reference);
+    const experimental = mode === "expert" && engineMode === "pizarra_experimental" && (engine?.family || activeModel?.family) === "sdxl" && !isFaceReference && !loras.some((item) => item.active);
     const payload = {
       prompt: form.prompt.trim(),
       negative_prompt: form.negative_prompt,
@@ -575,6 +589,7 @@ export default function App() {
       seed: Number(form.seed),
       batch_size: isFaceReference ? 1 : Number(form.batch_size),
     };
+    if (experimental) Object.assign(payload, { engine_mode: "pizarra_experimental", negative_prompt: "", steps: 1, cfg_scale: 1, width: 64, height: 64, batch_size: 1 });
     const endpoint = isFaceReference ? "/api/generate/face-reference" : "/api/generate/txt2img";
     if (isFaceReference) {
       payload.reference_image = reference.dataUrl;
@@ -654,7 +669,7 @@ export default function App() {
           form={form} updateField={updateField} reference={reference} setReference={setReference} onReferenceFile={loadReference}
           onGenerate={handleGenerate} busy={busy} error={generationError || pollError} job={job}
           mode={mode} activeModel={activeModel} navigate={navigate} uploadLimits={uploadLimits}
-          engine={engine} loras={loras} onLoraChange={handleLoraChange}
+          engine={engine} loras={loras} onLoraChange={handleLoraChange} engineMode={engineMode} setEngineMode={setEngineMode}
         />
       );
     }
